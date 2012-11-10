@@ -1,11 +1,3 @@
-type program = decl list
-type decl = DVar of decl_vars
-          | DType of decl_typ
-          | DFun of decl_fun
-type decl_var = ctype * string
-type decl_typ = DStruct of string * decl_var list
-              | DUnion of string * decl_var list
-
 type ctype = Void | Int | Char | Struct of string | Union of string
            | Pointer of ctype
 
@@ -28,5 +20,19 @@ type instruction = EmptyInstr
                  | ExecExpr of expr
                  | IfThenElse of expr * instr * instr
                  | While of expr * instr
-                 | Block of  
+                 | Block of  qqch
                  | Return of expr option
+
+type decl_var = ctype * string
+type decl_typ = DStruct of string * decl_var list
+              | DUnion of string * decl_var list
+type decl_fun = { fun_return_type : ctype ;
+                  fun_args : decl_var list ;
+                  fun_body : instruction }
+type decl = DVars of decl_var list
+          | DType of decl_typ
+          | DFun of decl_fun
+
+type program = { prog_types : decl_typ list ;
+                 prog_globals : decl_var list ;
+                 prog_funs : decl_fun list }
