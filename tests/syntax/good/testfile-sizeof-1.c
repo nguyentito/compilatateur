@@ -1,0 +1,1 @@
+int main() { sizeof(char ****); }

@@ -1,0 +1,2 @@
+void v;
+int main() { }

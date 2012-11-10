@@ -1,4 +1,3 @@
-tests
 *.cmo
 *.cmi
 parser.automaton
