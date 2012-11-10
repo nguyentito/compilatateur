@@ -2,3 +2,5 @@
 *.cmi
 parser.automaton
 parser.conflicts
+_build
+x
