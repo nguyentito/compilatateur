@@ -57,7 +57,6 @@ rule get_token = parse
   | '+' {Plus}   | '-' {Minus}   | '*' {Star}  | '/' {Divide} | '%' {Modulo}  
   | "++" {Increment} | "--" {Decrement}
   | eof {Eof}
-(*  | _ as c { Fuckyou c } *)
 
 and read_base b acc = parse
   | digit_hex as d { read_base b (Int32.add (int32_digit_of_char d)
@@ -67,16 +66,11 @@ and read_base b acc = parse
   | "" { IntV acc }
 
 {
-let tokenize_file filename =
+let parse_file filename =
   let foo = ref [] in
   try
     let buf = Lexing.from_channel (open_in filename) in
-    while true do
-      foo := get_token buf :: !foo
-    done;
-    !foo
+    parse_source_file get_token buf
   with
       Sys_error _ -> failwith "File not found."
-    | End_of_file -> List.rev (!foo)
-        
 }
