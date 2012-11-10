@@ -24,8 +24,6 @@ let digit_hex = ['0' - '9']|['A' - 'F']|['a' - 'f']
 let digit_oct = ['0' - '7']
 let alpha = ['a' -'z']|['A' - 'Z']
 let ident = (alpha | '_') (alpha | digit | '_')*
-let keyword = "char"  | "else" | "for"  | "if" | "return" | "sizeof" | "struct" |
-              "union" | "void" | "while" 
 let character = ([' ' - '\127'] # [ '\\' '\'' '"']) 
                | "\\\\" | "\\'"|"\\\"" | "\\x" digit_hex digit_hex
 let string = '"' character* '"'
