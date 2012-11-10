@@ -66,10 +66,5 @@ and read_base b acc = parse
   | "" { IntV acc }
 
 {
-let parse_file filename =
-  try
-    let buf = Lexing.from_channel (open_in filename) in
-    parse_source_file get_token buf
-  with
-      Sys_error _ -> failwith "File not found."
+
 }
