@@ -27,7 +27,9 @@ let character = ([' ' - '\127'] # [ '\\' '\'' '"'])
                | "\\\\" | "\\'"| "\\\"" | "\\n" | "\\t" | "\\r"
                | "\\x" digit_hex digit_hex
 let string = '"' character* '"'
-let comment = "//" [^ '\n']*  |  "/*" ([^ '*'] | ('*'* [^ '/' '*']))* "*/"
+let comment = "//" [^ '\n']* 
+            | "/*" ([^ '*'] | ('*'* [^ '/' '*']))* '*'* "*/"
+            (* beautiful and deeply moving regex *)
 let junk = ['\005' - '\032'] | comment 
 
 rule get_token = parse
