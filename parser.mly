@@ -66,7 +66,7 @@ decl:
 decl_vars: t = typ ; vars = separated_nonempty_list(Comma, var) ; Semicolon
     { List.map (fun (n, id) -> (multi_pointer t n, id)) vars }
 
-decl_typ: k = type_keyword ; id = Ident ; LCurly fs = decl_vars* RCurly
+decl_typ: k = type_keyword ; id = Ident ; LCurly fs = decl_vars* RCurly ; Semicolon
     { k (id, List.concat fs) }
 
 decl_fun: tv = typed_var
@@ -78,7 +78,9 @@ decl_fun: tv = typed_var
         Ast.fun_args = args ;
         Ast.fun_body = b } }
 
-type_keyword:
+(* dunno why, but without the %inline, the reduction
+   type_keyword -> Struct or Union would never be applied *)
+%inline type_keyword:
   | Struct { fun (x,y) -> Ast.DStruct (x,y) }
   | Union  { fun (x,y) -> Ast.DUnion  (x,y) }
 
@@ -138,13 +140,22 @@ instruction:
   | Semicolon { Ast.EmptyInstr }
   | e = expr Semicolon { Ast.ExecExpr e }
 
+(* Note that with these grammar rules for if-else, the expression
+     if(a) if(b) c else d
+   is ambiguous (it can be read as either
+     if(a) { if(b) c } else d,
+   or
+     if(a) { if(b) c else d }
+   ), and we rely on Menhir preferring shift over reduce to resolve
+   the conflict the "right way". (http://en.wikipedia.org/wiki/Dangling_else)
+*)
   | If LParen e = expr RParen i1 = instruction
         { Ast.IfThenElse (e, i1, Ast.EmptyInstr) }
   | If LParen e = expr RParen i1 = instruction Else i2 = instruction
         { Ast.IfThenElse (e, i1, i2) }
+
   | While LParen e = expr RParen i = instruction
         { Ast.While (e, i) }
-
   | For LParen e1 = separated_list(Comma, expr) Semicolon
                e2 = expr? Semicolon
                e3 = separated_list(Comma, expr)
