@@ -1,0 +1,5 @@
+tests
+*.cmo
+*.cmi
+parser.automaton
+parser.conflicts

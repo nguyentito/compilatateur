@@ -67,7 +67,6 @@ and read_base b acc = parse
 
 {
 let parse_file filename =
-  let foo = ref [] in
   try
     let buf = Lexing.from_channel (open_in filename) in
     parse_source_file get_token buf
