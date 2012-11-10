@@ -21,6 +21,7 @@
       prog_funs    = List.rev funs }
 %}
 
+%token Eof
 %token Char Else For If Int Return Sizeof Struct Union Void While
 %token Comma Semicolon Colon
 %token Equal Different LessEq Less GreaterEq Greater
@@ -44,7 +45,7 @@
 %right Not Increment Decrement Address unary
 %left Arrow Dot strong
 
-%start parse_source_file
+%start <Ast.program> parse_source_file
 
 %%
 
@@ -81,7 +82,7 @@ typ:
   | Struct id = Ident { Ast.Struct id }
   | Union  id = Ident { Ast.Union  id }
 
-var: stars = Star* i = ident { (List.length stars, i) }
+var: stars = Star* i = Ident { (List.length stars, i) }
 
 typed_var: t=typ v=var { let (n,i) = v in (multi_pointer t n, i) } 
 
@@ -119,8 +120,8 @@ expr:
 
   | x = expr o = op y = expr { Ast.Binop (o, x, y) }
     
-%inline op :
-  | And {Ast.And}  | Or {Ast.Or} | Equal {Ast.Equal} | Different {Ast.Different}
+%inline op:
+  | And {Ast.And} | Or {Ast.Or} | Equal {Ast.Equal} | Different {Ast.Different}
   | Less {Ast.Less}       | LessEq {Ast.LessEq}
   | Greater {Ast.Greater} | GreaterEq {Ast.GreaterEq}
   | Plus {Ast.Plus} | Minus {Ast.Minus}
@@ -128,20 +129,20 @@ expr:
 
       
 instruction:
-  | Semicolon
+  | Semicolon { Ast.EmptyInstr }
   | e = expr Semicolon { Ast.ExecExpr expr }
 
-  | If LParen e = expr RParen i1 = instr
+  | If LParen e = expr RParen i1 = instruction
         { Ast.IfThenElse e i1 Ast.EmptyInstr }
-  | If LParen e = expr RParen i1 = instr Else i2 = instr
+  | If LParen e = expr RParen i1 = instruction Else i2 = instruction
         { Ast.IfThenElse e i1 i2 }
-  | While LParen e = expr RParen i = instr
+  | While LParen e = expr RParen i = instruction
         { Ast.While e i }
 
   | For LParen e1 = separated_list(Comma, expr) Semicolon
                e2 = expr? Semicolon
                e3 = separated_list(Comma, expr)
-        RParen i = instr
+        RParen i = instruction
         { for_loop e1 e2 e3 i }
 
   | b = block { b }
