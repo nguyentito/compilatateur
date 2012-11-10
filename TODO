@@ -1,0 +1,7 @@
+A ajouter :
+* les annotations de position dans l'AST et dans le parser
+A écrire :
+* le main
+* un makefile qui gère le clean
+* un script pour tester automatiquement le programme sur tous les fichiers de test disponibles
+* le typeur
