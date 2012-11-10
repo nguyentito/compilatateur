@@ -27,7 +27,7 @@ let ident = (alpha | '_') (alpha | digit | '_')*
 let character = ([' ' - '\127'] # [ '\\' '\'' '"']) 
                | "\\\\" | "\\'"|"\\\"" | "\\x" digit_hex digit_hex
 let string = '"' character* '"'
-let comment = "//" [^ '\n']  |  "/*" ([^ '*'] | ('*'* [^ '/' '*']))* "*/"
+let comment = "//" [^ '\n']*  |  "/*" ([^ '*'] | ('*'* [^ '/' '*']))* "*/"
 let junk = ['\005' - '\032'] | comment 
 
 rule get_token = parse
