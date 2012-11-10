@@ -10,9 +10,8 @@
 
   let read_character s =
     let f = function
-      | "\\\\" -> '\\'
-      | "\\'"  -> '\''
-      | "\\\"" -> '"'
+      | "\\\\" -> '\\' | "\\'" -> '\'' | "\\\"" -> '"'
+      | "\\n"  -> '\n' | "\\t" -> '\t' | "\\r"  -> '\r'
       | s when String.length s = 4 && s.[0] = '\\' && s.[1] = 'x' ->
           char_of_int (16 * digit_of_char s.[2] + digit_of_char s.[3])
       | s -> s.[0]
@@ -25,7 +24,8 @@ let digit_oct = ['0' - '7']
 let alpha = ['a' -'z']|['A' - 'Z']
 let ident = (alpha | '_') (alpha | digit | '_')*
 let character = ([' ' - '\127'] # [ '\\' '\'' '"']) 
-               | "\\\\" | "\\'"|"\\\"" | "\\x" digit_hex digit_hex
+               | "\\\\" | "\\'"| "\\\"" | "\\n" | "\\t" | "\\r"
+               | "\\x" digit_hex digit_hex
 let string = '"' character* '"'
 let comment = "//" [^ '\n']*  |  "/*" ([^ '*'] | ('*'* [^ '/' '*']))* "*/"
 let junk = ['\005' - '\032'] | comment 
