@@ -12,16 +12,6 @@
       | None   -> Ast.IntV (Int32.of_int 1) in
     group (exec init @ [Ast.While (cond, group (body :: exec modif))])
   
-  let make_program decl_list =
-    let f (types, globals, funs) = function
-      | Ast.DVars vars -> (types,        vars @ globals, funs      )
-      | Ast.DType typ  -> (typ :: types, globals,        funs      )
-      | Ast.DFun  fn   -> (types,        globals,        fn :: funs)
-    in
-    let (types, globals, funs) = List.fold_left f ([],[],[]) decl_list in
-    { Ast.prog_types   = List.rev types ;
-      Ast.prog_globals = List.rev globals ;
-      Ast.prog_funs    = List.rev funs }
 %}
 
 %token Eof
@@ -56,7 +46,7 @@
 
 (* Grammar copied from the project specification *)
 
-parse_source_file: ds = decl* ; Eof { make_program ds }
+parse_source_file: ds = decl* ; Eof { ds }
  
 decl:
   | x = decl_vars { Ast.DVars x }
@@ -97,7 +87,7 @@ typed_var: t=typ v=var { let (n,i) = v in (multi_pointer t n, i) }
 expr:
   | i = IntV    { Ast.IntV    i  }
   | s = StringV { Ast.StringV s  }
-  | id = Ident  { Ast.Ident   id }
+  | id = Ident  { Ast.Var     id }
 
   | Star e = expr { Ast.Deref e }
   | a = expr LBracket i = expr RBracket %prec strong

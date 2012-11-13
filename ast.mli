@@ -1,11 +1,12 @@
 type ctype = Void | Int | Char | Struct of string | Union of string
            | Pointer of ctype
+           | TypeNull (* Used only for type-checking *)
 
 type binop = And | Or | Equal | Different
            | Less | LessEq  | Greater  | GreaterEq
            | Add | Sub | Mul | Div | Modulo
 
-type expr = IntV of Int32.t | StringV of string | Ident of string
+type expr = IntV of Int32.t | StringV of string | Var of string
           | Deref of expr
           | Subfield of expr * string
           | Assign of expr * expr
@@ -35,10 +36,4 @@ type decl = DVars of decl_var list
           | DType of decl_typ
           | DFun  of decl_fun
 
-(* Choix discutable : il ne permet pas de rejeter une variable globale dont
-   le type est déclaré après par exemple ...
-   Il serait envisageable de stocker le programme comme une liste ordonnée de decl.
-*)
-type program = { prog_types   : decl_typ list ;
-                 prog_globals : decl_var list ;
-                 prog_funs    : decl_fun list }
+type program = decl list
