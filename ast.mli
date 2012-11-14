@@ -19,14 +19,16 @@ type expr = IntV of Int32.t | StringV of string | Var of string
 
 type decl_var = ctype * string
 
+type block = { block_locals : decl_var list ;
+               block_instrs : instr list }
+
 type instr = EmptyInstr
            | ExecExpr of expr
            | IfThenElse of expr * instr * instr
-           | While of expr * instr (* Question : peut-être vaut-il mieux garder
-                                      la boucle for visible dans l'AST
-                                      et la désucrer après le typage
-                                      pour permettre de meilleurs messages d'erreur... *)
-           | Block of decl_var list * instr list
+           | While of expr * instr 
+           | For of expr list * expr option * expr list * instr (* Il vaut mieux que le for(;;)
+                                                                   soit désucré après typage *)
+           | Block of block
            | Return of expr option
 
 type decl_typ = DStruct of string * decl_var list
@@ -34,7 +36,7 @@ type decl_typ = DStruct of string * decl_var list
 type decl_fun = { fun_name : string ;
                   fun_return_type : ctype ;
                   fun_args : decl_var list ;
-                  fun_body : instr }
+                  fun_body : block }
 type decl = DVars of decl_var list
           | DType of decl_typ
           | DFun  of decl_fun

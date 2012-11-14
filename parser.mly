@@ -3,15 +3,6 @@
   let rec multi_pointer t = function
     | 0 -> t
     | n -> Ast.Pointer (multi_pointer t (n-1))
-
-  let for_loop init maybe_cond modif body =
-    let group instr_list = Ast.Block ([], instr_list) in
-    let exec = List.map (fun expr -> Ast.ExecExpr expr) in
-    let cond = match maybe_cond with
-      | Some c -> c
-      | None   -> Ast.IntV (Int32.of_int 1) in
-    group (exec init @ [Ast.While (cond, group (body :: exec modif))])
-  
 %}
 
 %token Eof
@@ -150,13 +141,13 @@ instruction:
                e2 = expr? Semicolon
                e3 = separated_list(Comma, expr)
         RParen i = instruction
-        { for_loop e1 e2 e3 i }
+        { Ast.For e1 e2 e3 i}
 
-  | b = block { b }
+  | b = block { Ast.Block b }
   | Return e = expr? Semicolon { Ast.Return e }
     
 block:
   | LCurly vars = decl_vars* instr_list = instruction* RCurly
-       { Ast.Block (List.concat vars, instr_list) }
+       { { Ast.block_locals = List.concat vars ; Ast.block_instrs = instr_list } }
 
 %%
