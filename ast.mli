@@ -22,7 +22,10 @@ type decl_var = ctype * string
 type instr = EmptyInstr
            | ExecExpr of expr
            | IfThenElse of expr * instr * instr
-           | While of expr * instr
+           | While of expr * instr (* Question : peut-être vaut-il mieux garder
+                                      la boucle for visible dans l'AST
+                                      et la désucrer après le typage
+                                      pour permettre de meilleurs messages d'erreur... *)
            | Block of decl_var list * instr list
            | Return of expr option
 

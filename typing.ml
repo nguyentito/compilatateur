@@ -37,6 +37,7 @@ let get_option_with_exn x exn = match x with
 (* Pas très joli... *)
 let (<??>) x exn = get_option_with_exn x exn
 
+
 (** Small definitions **)
 
 let is_num_non_ptr t = List.mem t [Int; Char; TypeNull] 
@@ -65,9 +66,12 @@ let rec lvalue = function
   | _ -> false
 
 
+(** Well-formed types **)
+
+
 (*** The core of the type checker ***)
 
-(** Type checking of expressions **)
+(** Type checking and inference for expressions **)
 
 (* A lot of possible semantic errors !
    TODO :
@@ -143,6 +147,8 @@ let rec type_expr env = function
       else assert_num (type_expr env e)
       
   | Positive e | Negative e -> assert_num (type_expr env e)
+  | Not e -> ignore (assert_num (type_expr env e)); Int
+
 
   | Binop (op, e1, e2) -> begin
       let t1 = type_expr env e1 and t2 = type_expr env e2 in
@@ -178,5 +184,52 @@ let rec type_expr env = function
       List.iter2 (fun t e -> ignore (assert_eqv t (type_expr env e)))
                  arg_types args;
       return_type
+
+let _ = ()
+
+(** Type checking of instructions **)
+
+(* Idée : lors de la génération de l'AST typé, permettre la transformation
+   d'une instruction en liste d'instructions qu'on concaténera
+   d'où emptyinstr -> [] par exemple *)
+
+(* For now, this function returns () if the instruction is well-typed,
+   else it throws an exception *)
+
+exception InvalidReturnVoid
+
+let rec typecheck_instr ret_type env = function
+  | EmptyInstr -> ()
+  | ExecExpr e -> ignore (type_expr env e)
+
+  | Return None when ret_type = Void -> ()
+  | Return None                      -> raise InvalidReturnVoid
+  | Return (Some e) -> (* problem : do we allow return f(); with void* f() ? *)
+      ignore (assert_eqv ret_type (type_expr env e))
+
+  | IfThenElse (e, i1, i2) -> begin
+      ignore (assert_num (type_expr env e));
+      ignore (typecheck_instr ret_type env i1);
+      ignore (typecheck_instr ret_type env i2)
+    end
+  | While (e,i) -> begin
+      ignore (assert_num (type_expr env e));
+      ignore (typecheck_instr ret_type env i)
+    end
+
+  | Block (local_vars, instr_list) -> begin (* TODO : add well-formed and non-void conditions *)
+      let left_biased_merge k a b = match (a,b) with
+        | (Some x, _) -> Some x
+        | (None, _) -> b
+      in (* local declarations override global declarations *)
+      let local_vars_map = List.fold_left (fun acc (typ,var) -> SMap.add var typ acc)
+                                          SMap.empty local_vars in
+      let new_vars_map = SMap.merge left_biased_merge local_vars_map env.env_vars in
+      let new_env = { env_vars = new_vars_map ;
+                      env_structs = env.env_structs ;
+                      env_unions = env.env_unions ;
+                      env_functions = env.env_functions } in
+      List.iter (fun instr -> typecheck_instr ret_type new_env instr) instr_list
+    end
 
 
