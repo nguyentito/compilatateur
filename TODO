@@ -1,7 +1,16 @@
 A ajouter :
-* les annotations de position dans l'AST et dans le parser
+* les annotations de position dans l'AST dans le parser
+* dans le typeur :
+    * production d'AST typé
+    * erreurs plus claires et plus pertinentes qu'actuellement
+    * infos de localisation pour ces erreurs
+    * restructuration possible du code
+    * enfin bref, pas mal de choses...
+
 A écrire :
-* le main
-* un makefile qui gère le clean
+* le main, avec gestion des erreurs de compil correcte
+  (en particulier codes de sorties et format du message d'erreur)
+* un makefile qui gère le clean, invocant ocamlbuild
 * un script pour tester automatiquement le programme sur tous les fichiers de test disponibles
-* le typeur
+   --> c'est fait en OCaml mais ça serait bien d'avoir un petit shell script
+       pour tester le programme compilé qui prend des flags

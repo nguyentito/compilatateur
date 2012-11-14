@@ -16,10 +16,14 @@ type typing_environment = { env_vars : ctype SMap.t ;
                             env_unions  : decl_var list SMap.t ;
                             env_functions : fun_prototype SMap.t }
 
-let empty_env = { env_vars = SMap.empty ;
-                  env_structs = SMap.empty ;
-                  env_unions = SMap.empty ;
-                  env_functions = SMap.empty }
+(* Maybe there's a more elegant way to handle primitive functions *)
+let initial_fun_map = SMap.add "putchar" (Int, [Int])
+                               (SMap.singleton "sbrk" (Pointer Void, [Int]))
+
+let initial_env = { env_vars = SMap.empty ;
+                    env_structs = SMap.empty ;
+                    env_unions = SMap.empty ;
+                    env_functions = initial_fun_map }
 
 (* Note : the OCaml stdlib doesn't define a find function which uses an option
    type instead of the Not_found exception to signal failure
@@ -179,7 +183,9 @@ let rec type_expr env = function
       then raise InvalidLValue
       else assert_num (type_expr env e)
       
-  | Positive e | Negative e -> assert_num (type_expr env e)
+  | Positive e | Negative e -> if is_num_non_ptr (type_expr env e)
+                               then Int
+                               else raise ArithFail (* est-ce vraiment la bonne exception ? *)
   | Not e -> ignore (assert_num (type_expr env e)); Int
 
 
@@ -226,11 +232,23 @@ let _ = ()
    d'une instruction en liste d'instructions qu'on concaténera
    d'où emptyinstr -> [] par exemple *)
 
-(* For now, this function returns () if the instruction is well-typed,
-   else it throws an exception *)
-
 exception InvalidReturnVoid
 exception VoidVariable
+exception NonUniqueLocal
+
+(* Very useful when used with List.fold_left
+   Suggestion : move this under the "typing environment" section *)
+let add_var_with_exn env exn var_map (typ,var) =
+  if SMap.mem var var_map
+  then raise exn
+  else begin 
+    ignore (assert_well_formed env typ);
+    if typ = Void then raise VoidVariable;
+    SMap.add var typ var_map
+  end
+
+(* For now, this function returns () if the instruction is well-typed,
+   else it throws an exception *)
 
 let rec typecheck_instr ret_type env = function
   | EmptyInstr -> ()
@@ -265,9 +283,8 @@ let rec typecheck_instr ret_type env = function
     end 
 
   | Block b -> begin
-      List.iter (fun (t,_) -> ignore (assert_well_formed env t)) b.block_locals;
       (* local declarations override global declarations *)
-      let local_vars_map = List.fold_left (fun acc (typ,var) -> SMap.add var typ acc)
+      let local_vars_map = List.fold_left (add_var_with_exn env NonUniqueLocal)
                                           SMap.empty b.block_locals in
       let new_env = { env_vars = left_biased_merge local_vars_map env.env_vars ;
                       env_structs = env.env_structs ;
@@ -284,7 +301,6 @@ exception NonUniqueStructId
 exception NonUniqueUnionId
 exception NonUniqueField
 exception NonUniqueGlobal
-exception NonUniqueLocal (* argument or local variable *)
 
 (* Idée : dans l'AST typé, ne pas garder les DVars qui correspondent à
    des déclarations du genre int *a, b, ***c; mais avoir 1 déclaration
@@ -292,15 +308,12 @@ exception NonUniqueLocal (* argument or local variable *)
 
 (* Idée 2 : la structure représentant le programme après le typage devrait
    être un record avec des champs séparés pour les variables globales,
-   les struct/union et les fonctions *)
+   les struct/union et les fonctions
+   Idée 2 bis : étendre l'environnement de typage qu'on construit pour ça,
+   et faire d'une pierre deux coups
+ *)
 
 let typecheck_program program =
-  (* Note : global vars and functions are in the same namespace ! *)
-  let assert_unique_ident id env =
-    if SMap.mem id env.env_vars || SMap.mem id env.env_functions
-    then raise NonUniqueGlobal
-    else ()
-  in
 
   let rec assert_unique_fields = function (* O(n^2), deal with it =p *)
     | [] -> ()
@@ -308,15 +321,22 @@ let typecheck_program program =
                   then raise NonUniqueField
                   else assert_unique_fields q
   in
+  let assert_valid_fields env fields = 
+    List.iter (fun (t,_) -> ignore (assert_well_formed env t);
+                            if t = Void then raise VoidVariable)
+              fields;
+    assert_unique_fields fields
+  in
 
   let f env = function (* the folding function which check the soundness of
                           the declaration and adds it to the environment *)
     | DVars global_vars ->
-        let add_var var_map (typ,var) =
-          assert_unique_ident var env;
-          SMap.add var typ var_map
-        in
-        let new_vars_map = List.fold_left add_var env.env_vars global_vars in
+        let new_vars_map = List.fold_left (add_var_with_exn env NonUniqueGlobal)
+                                          env.env_vars global_vars in
+        (* Note : global vars and functions are in the same namespace ! *)
+        if List.exists (fun (_,var) -> SMap.mem var env.env_functions)
+                       global_vars
+        then raise NonUniqueGlobal;
         { env_vars = new_vars_map ;
           env_structs = env.env_structs ;
           env_unions = env.env_unions ;
@@ -325,7 +345,7 @@ let typecheck_program program =
     | DType (DStruct (name, fields)) ->
         if SMap.mem name env.env_structs then raise NonUniqueStructId
         else begin
-          assert_unique_fields fields;
+          assert_valid_fields env fields;
           { env_vars = env.env_vars ;
             env_structs = SMap.add name fields env.env_structs ;
             env_unions = env.env_unions ;
@@ -335,7 +355,7 @@ let typecheck_program program =
     | DType (DUnion (name, fields)) ->
         if SMap.mem name env.env_unions then raise NonUniqueUnionId
         else begin
-          assert_unique_fields fields;
+          assert_valid_fields env fields;
           { env_vars = env.env_vars ;
             env_structs = env.env_structs ;
             env_unions = SMap.add name fields env.env_unions ;
@@ -343,15 +363,14 @@ let typecheck_program program =
         end
 
     | DFun fn -> begin
-        assert_unique_ident fn.fun_name env;
+        (* Refer to previous note on namespaces *)
+        if SMap.mem fn.fun_name env.env_vars ||
+           SMap.mem fn.fun_name env.env_functions
+        then raise NonUniqueGlobal;
         let fn_proto = (fn.fun_return_type, List.map fst fn.fun_args) in
 
-        let add_arg var_map (typ,var) =
-          if SMap.mem var var_map
-          then raise NonUniqueLocal
-          else SMap.add var typ var_map
-        in
-        let arg_map = List.fold_left add_arg SMap.empty fn.fun_args in
+        let arg_map = List.fold_left (add_var_with_exn env NonUniqueLocal)
+                                     SMap.empty fn.fun_args in
         List.iter (fun (_,var) -> if SMap.mem var arg_map then raise NonUniqueLocal)
                   fn.fun_body.block_locals;
         let function_env =  { env_vars = left_biased_merge arg_map env.env_vars ;
@@ -367,4 +386,4 @@ let typecheck_program program =
           env_functions = SMap.add fn.fun_name fn_proto env.env_functions }
       end
   in
-  ignore (List.fold_left f empty_env program)
+  ignore (List.fold_left f initial_env program)
