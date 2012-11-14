@@ -1,7 +1,8 @@
 (* Note : this does not yet produced a labeled AST,
-   it only checks the type-correctness of the source *)
+   it only checks the type-correctness of the source
+ *)
 
-(*open Ast*)
+open Ast
 module SMap = Map.Make(String)
 
 (*** Praeludium ***)
@@ -14,6 +15,11 @@ type typing_environment = { env_vars : ctype SMap.t ;
                             env_structs : decl_var list SMap.t ;
                             env_unions  : decl_var list SMap.t ;
                             env_functions : fun_prototype SMap.t }
+
+let empty_env = { env_vars = SMap.empty ;
+                  env_structs = SMap.empty ;
+                  env_unions = SMap.empty ;
+                  env_functions = SMap.empty }
 
 (* Note : the OCaml stdlib doesn't define a find function which uses an option
    type instead of the Not_found exception to signal failure
@@ -36,6 +42,14 @@ let get_option_with_exn x exn = match x with
 
 (* Pas très joli... *)
 let (<??>) x exn = get_option_with_exn x exn
+
+(* General utility function, useful for modifying the environment *)
+let left_biased_merge =
+  let f k a b = match (a,b) with
+    | (Some x, _) -> Some x
+    | (None, _) -> b
+  in
+  SMap.merge f
 
 
 (** Small definitions **)
@@ -67,6 +81,21 @@ let rec lvalue = function
 
 
 (** Well-formed types **)
+
+(* Possible improvement : exceptions describing the errors
+   instead of just true/false
+   One possible solution would be to move all the exceptions
+   to the very top of the file, so that they could be thrown
+   from anywhere
+ *)
+
+let rec well_formed env = function
+  | TypeNull -> failwith "WTF is a typenull doing in a type declaration ?"
+  | Void | Int | Char -> true
+  | Struct s -> lookup_struct s env <> None (* if a struct is in the environment,
+                                               its fields should already be well-formed *)
+  | Union s -> lookup_union s env <> None
+  | Pointer t -> well_formed env t
 
 
 (*** The core of the type checker ***)
@@ -101,8 +130,12 @@ exception InvalidLValue
 exception InvalidPointer
 exception NonComposite (* composite = struct or union *)
 
+(* Others *)
+exception MalformedType
+
 let assert_num t = if is_num t then t else raise NonNumeric
 let assert_eqv t1 t2 = if t1 === t2 then t1 else raise TypeMismatch
+let assert_well_formed env t = if well_formed env t then t else raise MalformedType
 
 let rec type_expr env = function
   | IntV x when x = Int32.zero -> TypeNull
@@ -113,7 +146,7 @@ let rec type_expr env = function
   | Var x -> lookup_var x env <??> UnknownVar
 
   | Sizeof Void -> raise SizeofVoid
-  | Sizeof _    -> Int (* TODO : add the well-formed condition *)
+  | Sizeof t -> ignore (assert_well_formed env t); Int
 
   | Address e when lvalue e -> Pointer (type_expr env e)
   | Address e               -> raise InvalidLValue
@@ -197,6 +230,7 @@ let _ = ()
    else it throws an exception *)
 
 exception InvalidReturnVoid
+exception VoidVariable
 
 let rec typecheck_instr ret_type env = function
   | EmptyInstr -> ()
@@ -217,19 +251,120 @@ let rec typecheck_instr ret_type env = function
       ignore (typecheck_instr ret_type env i)
     end
 
-  | Block (local_vars, instr_list) -> begin (* TODO : add well-formed and non-void conditions *)
-      let left_biased_merge k a b = match (a,b) with
-        | (Some x, _) -> Some x
-        | (None, _) -> b
-      in (* local declarations override global declarations *)
+  (* Dans le nouvel AST, il faudra transformer ça en boucle while,
+     et ça va pas être très beau...
+     Au moins, il n'y aura pas à gérer le comportement de break/continue *)
+  | For (init, cond_option, update, body) -> begin
+      List.iter (fun e -> ignore (type_expr env e)) init;
+      begin match cond_option with
+        | Some cond -> ignore (assert_num (type_expr env cond))
+        | None -> ()
+      end;
+      List.iter (fun e -> ignore (type_expr env e)) update;
+      typecheck_instr ret_type env body
+    end 
+
+  | Block b -> begin
+      List.iter (fun (t,_) -> ignore (assert_well_formed env t)) b.block_locals;
+      (* local declarations override global declarations *)
       let local_vars_map = List.fold_left (fun acc (typ,var) -> SMap.add var typ acc)
-                                          SMap.empty local_vars in
-      let new_vars_map = SMap.merge left_biased_merge local_vars_map env.env_vars in
-      let new_env = { env_vars = new_vars_map ;
+                                          SMap.empty b.block_locals in
+      let new_env = { env_vars = left_biased_merge local_vars_map env.env_vars ;
                       env_structs = env.env_structs ;
                       env_unions = env.env_unions ;
                       env_functions = env.env_functions } in
-      List.iter (fun instr -> typecheck_instr ret_type new_env instr) instr_list
+      List.iter (fun instr -> typecheck_instr ret_type new_env instr) b.block_instrs
     end
 
 
+(** Type checking of entire programs **)
+
+(* Uniqueness of identifiers *)
+exception NonUniqueStructId
+exception NonUniqueUnionId
+exception NonUniqueField
+exception NonUniqueGlobal
+exception NonUniqueLocal (* argument or local variable *)
+
+(* Idée : dans l'AST typé, ne pas garder les DVars qui correspondent à
+   des déclarations du genre int *a, b, ***c; mais avoir 1 déclaration
+   séparée pour chacun *)
+
+(* Idée 2 : la structure représentant le programme après le typage devrait
+   être un record avec des champs séparés pour les variables globales,
+   les struct/union et les fonctions *)
+
+let typecheck_program program =
+  (* Note : global vars and functions are in the same namespace ! *)
+  let assert_unique_ident id env =
+    if SMap.mem id env.env_vars || SMap.mem id env.env_functions
+    then raise NonUniqueGlobal
+    else ()
+  in
+
+  let rec assert_unique_fields = function (* O(n^2), deal with it =p *)
+    | [] -> ()
+    | (_,f)::q -> if List.exists (fun (_,f') -> f' = f) q
+                  then raise NonUniqueField
+                  else assert_unique_fields q
+  in
+
+  let f env = function (* the folding function which check the soundness of
+                          the declaration and adds it to the environment *)
+    | DVars global_vars ->
+        let add_var var_map (typ,var) =
+          assert_unique_ident var env;
+          SMap.add var typ var_map
+        in
+        let new_vars_map = List.fold_left add_var env.env_vars global_vars in
+        { env_vars = new_vars_map ;
+          env_structs = env.env_structs ;
+          env_unions = env.env_unions ;
+          env_functions = env.env_functions }
+
+    | DType (DStruct (name, fields)) ->
+        if SMap.mem name env.env_structs then raise NonUniqueStructId
+        else begin
+          assert_unique_fields fields;
+          { env_vars = env.env_vars ;
+            env_structs = SMap.add name fields env.env_structs ;
+            env_unions = env.env_unions ;
+            env_functions = env.env_functions }
+        end
+
+    | DType (DUnion (name, fields)) ->
+        if SMap.mem name env.env_unions then raise NonUniqueUnionId
+        else begin
+          assert_unique_fields fields;
+          { env_vars = env.env_vars ;
+            env_structs = env.env_structs ;
+            env_unions = SMap.add name fields env.env_unions ;
+            env_functions = env.env_functions }
+        end
+
+    | DFun fn -> begin
+        assert_unique_ident fn.fun_name env;
+        let fn_proto = (fn.fun_return_type, List.map fst fn.fun_args) in
+
+        let add_arg var_map (typ,var) =
+          if SMap.mem var var_map
+          then raise NonUniqueLocal
+          else SMap.add var typ var_map
+        in
+        let arg_map = List.fold_left add_arg SMap.empty fn.fun_args in
+        List.iter (fun (_,var) -> if SMap.mem var arg_map then raise NonUniqueLocal)
+                  fn.fun_body.block_locals;
+        let function_env =  { env_vars = left_biased_merge arg_map env.env_vars ;
+                              env_structs = env.env_structs ;
+                              env_unions = env.env_unions ;
+                              env_functions = SMap.add fn.fun_name fn_proto
+                                                       env.env_functions } in
+        typecheck_instr fn.fun_return_type function_env (Block fn.fun_body);
+
+        { env_vars = env.env_vars ;
+          env_structs = env.env_structs ;
+          env_unions = env.env_unions ;
+          env_functions = SMap.add fn.fun_name fn_proto env.env_functions }
+      end
+  in
+  ignore (List.fold_left f empty_env program)

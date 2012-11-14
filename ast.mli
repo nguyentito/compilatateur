@@ -19,9 +19,6 @@ type expr = IntV of Int32.t | StringV of string | Var of string
 
 type decl_var = ctype * string
 
-type block = { block_locals : decl_var list ;
-               block_instrs : instr list }
-
 type instr = EmptyInstr
            | ExecExpr of expr
            | IfThenElse of expr * instr * instr
@@ -30,6 +27,8 @@ type instr = EmptyInstr
                                                                    soit désucré après typage *)
            | Block of block
            | Return of expr option
+and block = { block_locals : decl_var list ;
+              block_instrs : instr list }
 
 type decl_typ = DStruct of string * decl_var list
               | DUnion of string * decl_var list
