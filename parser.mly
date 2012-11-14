@@ -106,10 +106,10 @@ expr:
   | e = expr Increment { Ast.PostInc e } %prec unary
   | e = expr Decrement { Ast.PostDec e } %prec unary
 
-  | Address e = expr { Ast.Address e } %prec unary
-  | Not e = expr { Ast.Not e } %prec unary
-  | Plus e = expr { e } %prec unary
-  | Minus e = expr { Ast.Negation e } %prec unary
+  | Address e = expr { Ast.Address e  } %prec unary
+  | Not     e = expr { Ast.Not e      } %prec unary
+  | Plus    e = expr { Ast.Positive e } %prec unary (* it's actually useful for later *)
+  | Minus   e = expr { Ast.Negative e } %prec unary
 
   | Sizeof LParen t = typ stars = Star* RParen %prec strong
         { Ast.Sizeof (multi_pointer t (List.length stars)) }

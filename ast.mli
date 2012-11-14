@@ -3,7 +3,7 @@ type ctype = Void | Int | Char | Struct of string | Union of string
            | TypeNull (* Used only for type-checking *)
 
 type binop = And | Or | Equal | Different
-           | Less | LessEq  | Greater  | GreaterEq
+           | Less | LessEq  | Greater | GreaterEq
            | Add | Sub | Mul | Div | Modulo
 
 type expr = IntV of Int32.t | StringV of string | Var of string
@@ -13,7 +13,7 @@ type expr = IntV of Int32.t | StringV of string | Var of string
           | Apply of string * expr list (* No crazy sh** with function pointers allowed *)
           | PreInc of expr | PreDec of expr | PostInc of expr | PostDec of expr
           | Address of expr
-          | Not of expr | Negation of expr
+          | Not of expr | Positive of expr | Negative of expr
           | Binop of binop * expr * expr
           | Sizeof of ctype
 
