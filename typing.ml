@@ -132,6 +132,7 @@ exception SizeofVoid
 (* What you tried to do made no sense ! *)
 exception InvalidLValue
 exception InvalidPointer
+exception InvalidArgumentList (* it means the arg list was not the right length *)
 exception NonComposite (* composite = struct or union *)
 
 (* Others *)
@@ -220,8 +221,14 @@ let rec type_expr env = function
   | Apply (fn, args) ->
       let (return_type, arg_types) = lookup_function fn env
                                    <??> UnknownFunction in
-      List.iter2 (fun t e -> ignore (assert_eqv t (type_expr env e)))
-                 arg_types args;
+      begin
+        try
+          List.iter2 (fun t e -> ignore (assert_eqv t (type_expr env e)))
+                     arg_types args
+        with
+          (* raised by iter2 when the lists have different lengths *)
+          | Invalid_argument _ -> raise InvalidArgumentList
+      end;
       return_type
 
 let _ = ()
@@ -296,6 +303,8 @@ let rec typecheck_instr ret_type env = function
 
 (** Type checking of entire programs **)
 
+exception SelfReferentialType
+
 (* Uniqueness of identifiers *)
 exception NonUniqueStructId
 exception NonUniqueUnionId
@@ -315,14 +324,29 @@ exception NonUniqueGlobal
 
 let typecheck_program program =
 
-  let rec assert_unique_fields = function (* O(n^2), deal with it =p *)
-    | [] -> ()
-    | (_,f)::q -> if List.exists (fun (_,f') -> f' = f) q
-                  then raise NonUniqueField
-                  else assert_unique_fields q
-  in
-  let assert_valid_fields env fields = 
-    List.iter (fun (t,_) -> ignore (assert_well_formed env t);
+  let assert_valid_fields env self_type fields = 
+    let rec assert_unique_fields = function (* O(n^2), deal with it =p *)
+      | [] -> ()
+      | (_,f)::q -> if List.exists (fun (_,f') -> f' = f) q
+                    then raise NonUniqueField
+                    else assert_unique_fields q
+    in    
+    let rec is_recursive_pointer0 = function
+      | Pointer t -> is_recursive_pointer0 t
+      | t when t = self_type -> true
+      | _ -> false
+    in
+    let is_recursive_pointer = function
+      | Pointer t -> is_recursive_pointer0 t
+        (* Oui, c'est moche de lever une exception dans ce qui est censé être
+           un prédicat purement fonctionnel, mais c'est pas si grave
+           TODO : améliorer ça pour rendre le code plus professionnel *)
+      | t when t = self_type -> raise SelfReferentialType
+      | _ -> false
+    in
+
+    List.iter (fun (t,_) -> if not (is_recursive_pointer t)
+                            then ignore (assert_well_formed env t);
                             if t = Void then raise VoidVariable)
               fields;
     assert_unique_fields fields
@@ -345,7 +369,7 @@ let typecheck_program program =
     | DType (DStruct (name, fields)) ->
         if SMap.mem name env.env_structs then raise NonUniqueStructId
         else begin
-          assert_valid_fields env fields;
+          assert_valid_fields env (Struct name) fields;
           { env_vars = env.env_vars ;
             env_structs = SMap.add name fields env.env_structs ;
             env_unions = env.env_unions ;
@@ -355,7 +379,7 @@ let typecheck_program program =
     | DType (DUnion (name, fields)) ->
         if SMap.mem name env.env_unions then raise NonUniqueUnionId
         else begin
-          assert_valid_fields env fields;
+          assert_valid_fields env (Union name) fields;
           { env_vars = env.env_vars ;
             env_structs = env.env_structs ;
             env_unions = SMap.add name fields env.env_unions ;
