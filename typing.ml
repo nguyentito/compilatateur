@@ -8,17 +8,22 @@ module SMap = Map.Make(String)
 
 (** The typing environment, and related utilities **)
 
+type fun_prototype = ctype * ctype list
+
 type typing_environment = { env_vars : ctype SMap.t ;
                             env_structs : decl_var list SMap.t ;
-                            env_unions  : decl_var list SMap.t }
+                            env_unions  : decl_var list SMap.t ;
+                            env_functions : fun_prototype SMap.t }
 
 (* Note : the OCaml stdlib doesn't define a find function which uses an option
    type instead of the Not_found exception to signal failure
    This is f**king stupid ! *)
 let maybe_find f = try Some (f ()) with Not_found -> None
-let lookup_var    x env = maybe_find (fun () -> SMap.find x env.env_vars)
-let lookup_struct x env = maybe_find (fun () -> SMap.find x env.env_structs)
-let lookup_union  x env = maybe_find (fun () -> SMap.find x env.env_unions)
+let maybe_find_in_env f x env = maybe_find (fun () -> SMap.find x (f env))
+let lookup_var      = maybe_find_in_env (fun e -> e.env_vars)
+let lookup_struct   = maybe_find_in_env (fun e -> e.env_structs)
+let lookup_union    = maybe_find_in_env (fun e -> e.env_unions)
+let lookup_function = maybe_find_in_env (fun e -> e.env_functions)
 
 let rec assoc_field_type x = function
   | [] -> None
@@ -48,6 +53,11 @@ let is_num = function
   | t when is_num_non_ptr t -> true
   | _ -> false
 
+let is_ptr = function
+  | Pointer _ -> true
+  | TypeNull -> true
+  | _ -> false
+
 let rec lvalue = function
   | Var   _ -> true
   | Deref _ -> true
@@ -75,10 +85,11 @@ exception UnknownStruct
 exception UnknownUnion
 exception UnknownStructField
 exception UnknownUnionField
+exception UnknownFunction
 
 (* Not the right types for a primitive operator *)
 exception NonNumeric
-exception NonArith (* le nom est pas terrible *)
+exception ArithFail (* le nom est pas terrible *)
 exception SizeofVoid
 
 (* What you tried to do made no sense ! *)
@@ -142,10 +153,30 @@ let rec type_expr env = function
             Int
           end
         | Mul | Div | Modulo | And | Or ->
-            if not (is_num_non_ptr t1) then raise NonArith else begin
+            if not (is_num_non_ptr t1) then raise ArithFail else begin
               ignore (assert_eqv t1 t2);
               Int
             end
-      | Add | Sub -> failwith ""
-  end
-      
+        (* Remember to give different constructors
+           to int+int and ptr+int in the eventual typed AST *)
+        (* The following is a way to solve the non-determinism which appears
+           in the formal type system rules when trying to infer the type of 0+0 *)
+        | Add | Sub when t1 = TypeNull && t2 = TypeNull -> TypeNull
+        | Add | Sub when is_num_non_ptr t1 && (t1 === t2) -> Int
+        (* Note : void* + int = void*, but typenull + int = int *)
+        | Add | Sub when is_ptr t1 && is_num_non_ptr t2 -> t1
+        | Add       when is_num_non_ptr t1 && is_ptr t2 -> t2
+        | Sub when is_ptr t1 && t1 === t2 -> Int
+        | Add | Sub (* all other cases *) -> raise ArithFail
+        (* I'm not convinced all the above code actually does the Right Thing,
+           but whatever... *)
+    end
+
+  | Apply (fn, args) ->
+      let (return_type, arg_types) = lookup_function fn env
+                                   <??> UnknownFunction in
+      List.iter2 (fun t e -> ignore (assert_eqv t (type_expr env e)))
+                 arg_types args;
+      return_type
+
+
