@@ -141,7 +141,7 @@ instruction:
                e2 = expr? Semicolon
                e3 = separated_list(Comma, expr)
         RParen i = instruction
-        { Ast.For e1 e2 e3 i}
+        { Ast.For (e1, e2, e3, i) }
 
   | b = block { Ast.Block b }
   | Return e = expr? Semicolon { Ast.Return e }
