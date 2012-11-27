@@ -27,13 +27,15 @@ let character = ([' ' - '\127'] # [ '\\' '\'' '"'])
                | "\\\\" | "\\'"| "\\\"" | "\\n" | "\\t" | "\\r"
                | "\\x" digit_hex digit_hex
 let string = '"' character* '"'
-let comment = "//" [^ '\n']* 
-            | "/*" ([^ '*'] | ('*'* [^ '/' '*']))* '*'* "*/"
-            (* beautiful and deeply moving regex *)
-let junk = ['\005' - '\032'] | comment 
 
 rule get_token = parse
-  | junk+ {get_token lexbuf}
+  (* This will allow correct handling of line numbers for error messages *)
+  | '\n' { Lexing.new_line lexbuf; get_token lexbuf }
+      
+  (* Junk elimination *)
+  | ['\005' - '\032'] { get_token lexbuf }
+  | "//" { comment_oneliner lexbuf }
+  | "/*" { comment_c89 lexbuf }
 
   | "char" {Char}  | "else" {Else}  | "for" {For}  | "if" {If} | "int" {Int}
   | "return" {Return}  | "sizeof" {Sizeof}  | "struct" {Struct}
@@ -60,11 +62,21 @@ rule get_token = parse
   | "++" {Increment} | "--" {Decrement}
   | eof {Eof}
 
+and comment_oneliner = parse
+  | '\n' { Lexing.new_line lexbuf; get_token lexbuf }
+  | eof {Eof}
+  | [^ '\n'] { comment_oneliner lexbuf }
+    
+and comment_c89 = parse
+  | "*/" { get_token lexbuf }
+  | '\n' { Lexing.new_line lexbuf; comment_c89 lexbuf }
+  | _ { comment_c89 lexbuf }
+
 and read_base b acc = parse
   | digit_hex as d { read_base b (Int32.add (int32_digit_of_char d)
                                             (Int32.mul (Int32.of_int b) acc))
                                lexbuf }
-  | eof { IntV acc }
+  | eof { IntV acc } (* Useless... *)
   | "" { IntV acc }
 
 {
