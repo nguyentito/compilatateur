@@ -16,7 +16,7 @@ int main() {
   putchar(10);
   print_int(strlen("hello world"));
   putchar(10);
-  print_int(strlen("hello world\n"));
+  print_int(strlen("hello world\x0a"));
   putchar(10);
   print_int(strlen("foo bar"));
   putchar(10);

@@ -1,6 +1,5 @@
 
 void f(){
-
-"ACBD\n\tE";
+  "ACBDE";
 }
 

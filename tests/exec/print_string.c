@@ -11,5 +11,5 @@ void print_endline(char *s) {
 
 int main() {
   print_endline("foo");
-  print_string("hello world\n");
+  print_string("hello world\x0a");
 }

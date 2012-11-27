@@ -94,7 +94,7 @@ int main() {
   putchar(10);
   if (contient(dico, 5) && !contient(dico, 0) &&
       contient(dico, 17) && !contient(dico, 3))
-    print_string("ok\n");
+    print_string("ok\x0a");
   insere(dico, 42);
   insere(dico, 1000);
   insere(dico, 0);
