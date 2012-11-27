@@ -1,3 +1,5 @@
+type location = Lexing.position * Lexing.position
+
 type ctype = Void | Int | Char | Struct of string | Union of string
            | Pointer of ctype
            | TypeNull (* Used only for type-checking *)
@@ -6,7 +8,7 @@ type binop = And | Or | Equal | Different
            | Less | LessEq  | Greater | GreaterEq
            | Add | Sub | Mul | Div | Modulo
 
-type expr = IntV of Int32.t | StringV of string | Var of string
+type expr_noloc = IntV of Int32.t | StringV of string | Var of string
           | Deref of expr
           | Subfield of expr * string
           | Assign of expr * expr
@@ -17,9 +19,11 @@ type expr = IntV of Int32.t | StringV of string | Var of string
           | Binop of binop * expr * expr
           | Sizeof of ctype
 
+and expr = expr_noloc * location
+
 type decl_var = ctype * string
 
-type instr = EmptyInstr
+type instr_noloc = EmptyInstr
            | ExecExpr of expr
            | IfThenElse of expr * instr * instr
            | While of expr * instr 
@@ -27,17 +31,25 @@ type instr = EmptyInstr
                                                                    soit désucré après typage *)
            | Block of block
            | Return of expr option
+and instr = instr_noloc * location
+
 and block = { block_locals : decl_var list ;
               block_instrs : instr list }
 
-type decl_typ = DStruct of string * decl_var list
+type decl_typ_noloc = DStruct of string * decl_var list
               | DUnion of string * decl_var list
-type decl_fun = { fun_name : string ;
+
+and decl_typ = decl_typ_noloc * location
+
+type decl_fun_noloc = { fun_name : string ;
                   fun_return_type : ctype ;
                   fun_args : decl_var list ;
                   fun_body : block }
-type decl = DVars of decl_var list
+and decl_fun = decl_fun_noloc * location
+
+type decl_noloc = DVars of decl_var list
           | DType of decl_typ
           | DFun  of decl_fun
+and decl = decl_noloc * location
 
 type program = decl list

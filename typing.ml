@@ -94,7 +94,7 @@ let rec lvalue = function
  *)
 
 let rec well_formed env = function
-  | TypeNull -> failwith "WTF is a typenull doing in a type declaration ?"
+  | TypeNull -> assert false
   | Void | Int | Char -> true
   | Struct s -> lookup_struct s env <> None (* if a struct is in the environment,
                                                its fields should already be well-formed *)

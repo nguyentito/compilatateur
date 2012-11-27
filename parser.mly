@@ -3,6 +3,8 @@
   let rec multi_pointer t = function
     | 0 -> t
     | n -> Ast.Pointer (multi_pointer t (n-1))
+
+  let with_dummy_loc x = (x, (Lexing.dummy_pos, Lexing.dummy_pos))
 %}
 
 %token Eof
@@ -35,22 +37,27 @@
 
 %%
 
+with_location(X):
+  | x = X { (x, ($startpos, $endpos)) }
+
 (* Grammar copied from the project specification *)
 
 parse_source_file: ds = decl* ; Eof { ds }
  
-decl:
+decl_noloc:
   | x = decl_vars { Ast.DVars x }
   | x = decl_typ  { Ast.DType x }
   | x = decl_fun  { Ast.DFun  x }
+decl : d = with_location(decl_noloc) {d}
 
 decl_vars: t = typ ; vars = separated_nonempty_list(Comma, var) ; Semicolon
     { List.map (fun (n, id) -> (multi_pointer t n, id)) vars }
 
-decl_typ: k = type_keyword ; id = Ident ; LCurly fs = decl_vars* RCurly ; Semicolon
+decl_typ_noloc: k = type_keyword ; id = Ident ; LCurly fs = decl_vars* RCurly ; Semicolon
     { k (id, List.concat fs) }
+decl_typ : d = with_location(decl_typ_noloc) {d}
 
-decl_fun: tv = typed_var
+decl_fun_noloc: tv = typed_var
           LParen args = separated_list(Comma, typed_var) RParen
           b = block
     { let (t, name) = tv in
@@ -58,7 +65,7 @@ decl_fun: tv = typed_var
         Ast.fun_return_type = t ;
         Ast.fun_args = args ;
         Ast.fun_body = b } }
-
+decl_fun : d = with_location(decl_fun_noloc) {d}
 (* dunno why, but without the %inline, the reduction
    type_keyword -> Struct or Union would never be applied *)
 %inline type_keyword:
@@ -75,17 +82,17 @@ var: stars = Star* i = Ident { (List.length stars, i) }
 typed_var: t=typ v=var { let (n,i) = v in (multi_pointer t n, i) } 
 
 
-expr:
+expr_noloc:
   | i = IntV    { Ast.IntV    i  }
   | s = StringV { Ast.StringV s  }
   | id = Ident  { Ast.Var     id }
 
   | Star e = expr { Ast.Deref e }
   | a = expr LBracket i = expr RBracket %prec strong
-        { Ast.Deref (Ast.Binop (Ast.Add, a, i)) }
+        { Ast.Deref ( (Ast.Binop (Ast.Add, a, i)), ($startpos, $endpos)) }
 
   | s  = expr  Dot  f = Ident { Ast.Subfield (s, f) }
-  | sp = expr Arrow f = Ident { Ast.Subfield (Ast.Deref sp, f) }
+  | sp = expr Arrow f = Ident { Ast.Subfield (with_dummy_loc (Ast.Deref sp), f) }
 
   | l = expr Assign r = expr { Ast.Assign (l, r) }
 
@@ -104,9 +111,12 @@ expr:
 
   | Sizeof LParen t = typ stars = Star* RParen %prec strong
         { Ast.Sizeof (multi_pointer t (List.length stars)) }
-  | LParen e = expr RParen { e }
+  | LParen e = expr_noloc RParen { e }
 
   | x = expr o = op y = expr { Ast.Binop (o, x, y) }
+
+expr:
+  | e = with_location(expr_noloc) { e }
     
 %inline op:
   | And {Ast.And} | Or {Ast.Or}
@@ -117,7 +127,7 @@ expr:
   | Divide {Ast.Div} | Modulo {Ast.Modulo}
 
       
-instruction:
+instruction_noloc:
   | Semicolon { Ast.EmptyInstr }
   | e = expr Semicolon { Ast.ExecExpr e }
 
@@ -131,7 +141,7 @@ instruction:
    the conflict the "right way". (http://en.wikipedia.org/wiki/Dangling_else)
 *)
   | If LParen e = expr RParen i1 = instruction
-        { Ast.IfThenElse (e, i1, Ast.EmptyInstr) }
+        { Ast.IfThenElse (e, i1, with_dummy_loc Ast.EmptyInstr) }
   | If LParen e = expr RParen i1 = instruction Else i2 = instruction
         { Ast.IfThenElse (e, i1, i2) }
 
@@ -145,6 +155,9 @@ instruction:
 
   | b = block { Ast.Block b }
   | Return e = expr? Semicolon { Ast.Return e }
+ 
+instruction:
+  | i = with_location(instruction_noloc) {i}
     
 block:
   | LCurly vars = decl_vars* instr_list = instruction* RCurly
