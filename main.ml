@@ -13,7 +13,7 @@ let signal_failure lexpos message =
                  lexpos.Lexing.pos_fname lexpos.Lexing.pos_lnum
                  lexpos.Lexing.pos_bol lexpos.Lexing.pos_cnum
                  message;
-  exit 2
+  exit 1
 
 let main_exec filename = 
   try 
