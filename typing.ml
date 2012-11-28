@@ -49,42 +49,42 @@ let rec assoc_field_type x = function
 type semantic_error =
 
 (* Most basic error of all *)
-  | TypeMismatch
+  | TypeMismatch of ctype * ctype
 
 (* These identifiers came out of nowhere ! *)
-  | UnknownVar
-  | UnknownStruct
-  | UnknownUnion
-  | UnknownStructField
-  | UnknownUnionField
-  | UnknownFunction
+  | UnknownVar of string
+  | UnknownStruct of string 
+  | UnknownUnion of string
+  | UnknownStructField of string * string
+  | UnknownUnionField of string * string
+  | UnknownFunction of string
 
 (* Not the right types for a primitive operator *)
-  | NonNumeric
+  | NonNumeric of ctype
   | ArithFail (* le nom est pas terrible *)
-  | NonNumericCondition (* for if/while/for *)
+  | NonNumericCondition of ctype (* for if/while/for *)
       
 (* What you tried to do made no sense ! *)
   | InvalidLValue
-  | InvalidPointer
-  | InvalidArgumentList (* it means the arg list was not the right length *)
-  | NonComposite (* composite = struct or union *)
+  | InvalidPointer of ctype
+  | InvalidArgumentList of string (* it means the arg list was not the right length *)
+  | NonComposite of ctype (* composite = struct or union *)
 
 (* Void is not a value type ! *)
   | SizeofVoid
   | InvalidReturnVoid
-  | VoidVariable
+  | VoidVariable 
 
 (* Uniqueness of identifiers *)
-  | NonUniqueStructId
-  | NonUniqueUnionId
-  | NonUniqueField
-  | NonUniqueGlobal
-  | NonUniqueLocal
+  | NonUniqueStructId of string
+  | NonUniqueUnionId of string
+  | NonUniqueField of string
+  | NonUniqueGlobal of string
+  | NonUniqueLocal of string
 
 (* Incorrect type expressions *)
-  | MalformedType
-  | SelfReferentialType
+  | MalformedType of ctype
+  | SelfReferentialType of ctype
       
 exception Error of semantic_error * location
 
@@ -143,11 +143,11 @@ let rec well_formed env = function
 (** Assertions **)
 
 let assert_num loc t =
-  if not (is_num t) then raise_err_with_loc loc NonNumeric
+  if not (is_num t) then raise_err_with_loc loc (NonNumeric t) 
 let assert_eqv loc t1 t2 =
-  if not (t1 === t2) then raise_err_with_loc loc TypeMismatch
+  if not (t1 === t2) then raise_err_with_loc loc (TypeMismatch (t1, t2))
 let assert_well_formed loc env t =
-  if not (well_formed env t) then raise_err_with_loc loc MalformedType
+  if not (well_formed env t) then raise_err_with_loc loc (MalformedType t)
 
 
 (** The typing environment, part 2 :
@@ -163,7 +163,7 @@ let left_biased_merge =
 (* Use with fold_left, and provide the environment and location *)
 let add_var_with_err loc env err var_map (typ,var) =
   if SMap.mem var var_map
-  then raise_err_with_loc loc err
+  then raise_err_with_loc loc (err var)
   else begin 
     assert_well_formed loc env typ;
     if typ = Void then raise_err_with_loc loc VoidVariable;
@@ -196,7 +196,7 @@ let rec type_expr env (expr, loc) =
     | IntV    _ -> Int
     | StringV _ -> Pointer Char
 
-    | Var x -> lookup_var x env <??> UnknownVar
+    | Var x -> lookup_var x env <??> UnknownVar x
 
     | Sizeof Void -> raise_err SizeofVoid
     | Sizeof t -> assert_well_formed loc env t; Int
@@ -211,15 +211,15 @@ let rec type_expr env (expr, loc) =
     *)
     | Deref e -> begin match type_expr env e with
         | Pointer t -> t
-        | _ -> raise_err InvalidPointer
+        | x -> raise_err (InvalidPointer x)
     end
       
     | Subfield (e,x) -> begin match type_expr env e with
-        | Struct s -> let fields = lookup_struct s env <??> UnknownStruct in
-                      assoc_field_type x fields <??> UnknownStructField
-        | Union s -> let fields = lookup_struct s env <??> UnknownUnion in
-                     assoc_field_type x fields <??> UnknownUnionField
-        | _ -> raise_err NonComposite
+        | Struct s -> let fields = lookup_struct s env <??> UnknownStruct s in
+                      assoc_field_type x fields <??> UnknownStructField (x,s)
+        | Union s -> let fields = lookup_struct s env <??> UnknownUnion s in
+                     assoc_field_type x fields <??> UnknownUnionField (x,s)
+        | t -> raise_err (NonComposite t)
     end
 
     | Assign ((l_noloc, _) as l, r) ->
@@ -269,14 +269,14 @@ let rec type_expr env (expr, loc) =
     end
 
   | Apply (fn, args) ->
-      let (return_type, arg_types) = lookup_function fn env <??> UnknownFunction in
+      let (return_type, arg_types) = lookup_function fn env <??> (UnknownFunction fn) in
       begin
         try
           List.iter2 (fun t e -> assert_eqv loc t (type_expr env e))
                      arg_types args
         with
           (* raised by iter2 when the lists have different lengths *)
-          | Invalid_argument _ -> raise_err InvalidArgumentList
+          | Invalid_argument _ -> raise_err (InvalidArgumentList fn)
       end;
       return_type
   end
@@ -295,7 +295,7 @@ let rec typecheck_instr ret_type env (instr, loc) =
 
   let assert_valid_cond e =
     let t = type_expr env e in
-    if not (is_num t) then raise_err_with_loc loc NonNumericCondition
+    if not (is_num t) then raise_err (NonNumericCondition t)
   in
 
   begin match instr with
@@ -305,7 +305,8 @@ let rec typecheck_instr ret_type env (instr, loc) =
     | Return None when ret_type = Void -> ()
     | Return None                      -> raise_err InvalidReturnVoid
     | Return (Some e) -> (* problem : do we allow return f(); with void f() ? *)
-        if not (ret_type === type_expr env e) then raise_err TypeMismatch 
+      let t = type_expr env e in 
+        if not (ret_type === t) then raise_err (TypeMismatch (ret_type,t)) 
 
     | IfThenElse (e, i1, i2) -> begin
         assert_valid_cond e;
@@ -332,7 +333,7 @@ let rec typecheck_instr ret_type env (instr, loc) =
 
     | Block b -> begin
         (* local declarations override global declarations *)
-        let local_vars_map = List.fold_left (add_var_with_err loc env NonUniqueLocal)
+        let local_vars_map = List.fold_left (add_var_with_err loc env (fun x -> NonUniqueLocal x))
                                             SMap.empty b.block_locals in
       let new_env = { env_vars = left_biased_merge local_vars_map env.env_vars ;
                       env_structs = env.env_structs ;
@@ -371,7 +372,7 @@ let typecheck_program program =
     let rec assert_unique_fields = function
       | [] -> ()
       | (_,f)::q -> if List.exists (fun (_,f') -> f' = f) q
-                    then raise_err NonUniqueField
+                    then raise_err (NonUniqueField f)
                     else assert_unique_fields q (* O(n^2), deal with it =p *)
     in    
     let rec is_recursive_pointer self_type = function
@@ -381,7 +382,7 @@ let typecheck_program program =
     in
     let assert_valid_field self_type = function
       | (Void, _) -> raise_err VoidVariable
-      | (t, _) when t = self_type -> raise_err SelfReferentialType
+      | (t, _) when t = self_type -> raise_err (SelfReferentialType t)
       | (Pointer t', _) when is_recursive_pointer self_type t' -> ()
       | (t, _) -> assert_well_formed loc env t
     in
@@ -392,19 +393,19 @@ let typecheck_program program =
       
     match decl with
       | DVars global_vars ->
-        let new_vars_map = List.fold_left (add_var_with_err loc env NonUniqueGlobal)
+        let new_vars_map = List.fold_left (add_var_with_err loc env (fun x -> NonUniqueGlobal x))
                                           env.env_vars global_vars in
         (* Note : global vars and functions are in the same namespace ! *)
-        if List.exists (fun (_,var) -> SMap.mem var env.env_functions)
-                       global_vars
-        then raise_err NonUniqueGlobal;
+        List.iter (fun (_,var) -> if SMap.mem var env.env_functions
+                                  then raise_err (NonUniqueGlobal var))
+                  global_vars;
         { env_vars = new_vars_map ;
           env_structs = env.env_structs ;
           env_unions = env.env_unions ;
           env_functions = env.env_functions }
 
       | DType (DStruct (name, fields)) ->
-        if SMap.mem name env.env_structs then raise_err NonUniqueStructId
+        if SMap.mem name env.env_structs then raise_err (NonUniqueStructId name)
         else begin
           assert_valid_fields (Struct name) fields;
           { env_vars = env.env_vars ;
@@ -414,7 +415,7 @@ let typecheck_program program =
         end
 
       | DType (DUnion (name, fields)) ->
-        if SMap.mem name env.env_unions then raise_err NonUniqueUnionId
+        if SMap.mem name env.env_unions then raise_err (NonUniqueUnionId name)
         else begin
           assert_valid_fields (Union name) fields;
           { env_vars = env.env_vars ;
@@ -427,12 +428,12 @@ let typecheck_program program =
         (* Refer to previous note on namespaces *)
         if SMap.mem fn.fun_name env.env_vars ||
            SMap.mem fn.fun_name env.env_functions
-        then raise_err NonUniqueGlobal;
+        then raise_err (NonUniqueGlobal fn.fun_name);
         let fn_proto = (fn.fun_return_type, List.map fst fn.fun_args) in
 
-        let arg_map = List.fold_left (add_var_with_err loc env NonUniqueLocal)
+        let arg_map = List.fold_left (add_var_with_err loc env (fun x -> NonUniqueLocal x))
                                      SMap.empty fn.fun_args in
-        List.iter (fun (_,var) -> if SMap.mem var arg_map then raise_err NonUniqueLocal)
+        List.iter (fun (_,var) -> if SMap.mem var arg_map then raise_err (NonUniqueLocal var))
                   fn.fun_body.block_locals;
         let function_env =  { env_vars = left_biased_merge arg_map env.env_vars ;
                               env_structs = env.env_structs ;
@@ -447,9 +448,54 @@ let typecheck_program program =
           env_functions = SMap.add fn.fun_name fn_proto env.env_functions }
       end
   in
+  (* Ne pas oublier après de vérifier la présence d'un main() *)
   ignore (List.fold_left f initial_env program)
 
 
 (*** Le meilleur pour la fin : les messages d'erreur ! ***)
 
-let error_message _ = "foobarbaz"
+let rec string_of_type  = function
+  | Void -> "void"
+  | Int -> "int"
+  | Char -> "char"
+  | Struct a -> "struct "^a
+  | Union a -> "union "^a
+  | TypeNull -> "TypeNull"
+  | Pointer a -> (string_of_type a )^"*"
+
+
+let error_message = function
+  | TypeMismatch (a, b) -> "Expected type "^(string_of_type a)^
+    " isn't of type "^ (string_of_type b)
+
+  | UnknownVar a -> "Variable name "^a^" is not defined"
+  | UnknownStruct a -> "Struct name "^a^" is not defined"
+  | UnknownUnion a -> "Union name "^a^" is not defined"
+  | UnknownStructField (a, b) -> "Field name "^a^" is not defined in struct "^b
+  | UnknownUnionField  (a, b) -> "Field name "^a^" is not defined in union "^b
+  | UnknownFunction a -> "Function name "^a^" is not defined"
+
+  | NonNumeric t -> "Cannot apply numeric operation to "^string_of_type t
+  | ArithFail -> "This arithmetic operation is illegal"
+  | NonNumericCondition t -> "Branching requires numeric type instead of "^string_of_type t
+      
+  | InvalidLValue -> "This is not an lvalue"
+  | InvalidPointer x -> "Type "^(string_of_type x)^" cannot be dereferenced"
+  | InvalidArgumentList f -> "Function "^f^" isn't applied to the correct number of arguments"
+  | NonComposite t -> "Target element of type "^(string_of_type t)^
+                      " is neither a struct nor an union and has no subfield"
+
+  | SizeofVoid ->  "Sizeof is not applied to an adequate argument"
+  | InvalidReturnVoid -> "This function cannot return void"
+  | VoidVariable -> "A variable cannot be of type void"
+
+  | NonUniqueStructId a -> "Struct identifier "^a^" is already defined"
+  | NonUniqueUnionId  a -> "Union identifier "^a^" is already defined"
+  | NonUniqueField a -> "Field identifier "^a^" is already defined"
+  | NonUniqueGlobal a -> "Global identifier "^a^" is already defined"
+  | NonUniqueLocal a -> "Local variable  "^a^" is already defined"
+
+  | MalformedType t -> "Type "^(string_of_type t)^" is not well-formed"
+  | SelfReferentialType a -> "Type "^(string_of_type a)^
+    " cannot contain a field of type "^string_of_type a
+      
