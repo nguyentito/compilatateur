@@ -7,3 +7,19 @@ A ajouter :
 
 A écrire :
 * la production de code !
+
+
+Idées pour l'AST typé :
+
+data_type := primitive (int | char | pointer) | (struct | union) of data_type array
+pointer = même type pour tous les (*t, t \in types existants) ???
+identificateur de champ de struct transformé en numéro (le i-ème champ)
+même genre de chose pour les fonctions
+programme : array de types user-defined * array de fonctions * array de vars globales
+assigner à chaque struct/func/global un numéro
+--> se débarasser définitivement des identifiants (info useless)
+pour les vars locales : effectuer la résolution de portée dans le typage
+var locale identifié par un couple (niveau, ordre de déclaration dans son scope block)
+on sait que si c'est bien typé, ça compile
+garder l'info de typage pour les littéraux pour distinguer char (1 octet) et int (4 octets)
+

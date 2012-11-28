@@ -8,6 +8,10 @@ type binop = And | Or | Equal | Different
            | Less | LessEq  | Greater | GreaterEq
            | Add | Sub | Mul | Div | Modulo
 
+(* Note : the X_noloc types have misleading names
+   they have no location info for their root node,
+   but the child nodes do have this info *)
+
 type expr_noloc = IntV of Int32.t | StringV of string | Var of string
           | Deref of expr
           | Subfield of expr * string

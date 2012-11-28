@@ -1,5 +1,4 @@
 %{
-  (* Transforme le type t en pointeur d'ordre n sur t *)
   let rec multi_pointer t = function
     | 0 -> t
     | n -> Ast.Pointer (multi_pointer t (n-1))
@@ -80,7 +79,6 @@ var: stars = Star* i = Ident { (List.length stars, i) }
 
 typed_var: t=typ v=var { let (n,i) = v in (multi_pointer t n, i) } 
 
-
 expr_noloc:
   | i = IntV    { Ast.IntV    i  }
   | s = StringV { Ast.StringV s  }
@@ -91,7 +89,7 @@ expr_noloc:
         { Ast.Deref ( (Ast.Binop (Ast.Add, a, i)), ($startpos, $endpos)) }
 
   | s  = expr  Dot  f = Ident { Ast.Subfield (s, f) }
-  | sp = expr Arrow f = Ident { Ast.Subfield (with_dummy_loc (Ast.Deref sp), f) }
+  | sp = expr Arrow f = Ident { Ast.Subfield ((Ast.Deref sp, ($startpos, $endpos)), f) }
 
   | l = expr Assign r = expr { Ast.Assign (l, r) }
 

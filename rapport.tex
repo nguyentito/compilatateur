@@ -47,9 +47,17 @@ des règles plutôt que des regex.
 
 Grammaire à peu près copiée sur la spécification du projet.
 Utilisation des fonctionnalités de Menhir :
-% règle paramétrée with_location, usage de inline, token error
+% règle paramétrée with_location, usage de inline
+message d'erreur pas très explicite (``Syntax error'')
+token error --> compliqué
 Dépendance sur le bon comportement de Menhir pour la résolution de conflits...
 côté ``black box'' insatisfaisant.
+Complications liées à la gestion des déclarations de variables
+int *a, b, **c;
+Convention de nommage : token Plus (nom symbole) -> binop Add (interprétation)
+Proximité avec la syntaxe concrète pour aider la signalisation d'erreur.
+Désucrage réduit ; choix fait lors de l'annotation de la localisation
+d'un noeud provenant d'un désucrage.
 
 \subsection{Vérification du typage}
 
@@ -69,6 +77,8 @@ Bénéfices potentiels des variables dynamically scoped.
 main.ml
 utilise le module Arg --> option --help gratuite
 point central de gestion des exceptions
+affichage des messages d'erreur
+--> format de signalisation restrictif (pour le typage)
 
 \subsubsection{Suite de tests}
 
