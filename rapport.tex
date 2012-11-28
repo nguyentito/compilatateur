@@ -8,15 +8,80 @@
 \begin{document}
  
 \title{Projet de compilation}
-\author{Nguyen Le Thanh Dung \and Nicolas Blanchard}
+\author{Nguy\~{\^e}n Lê Thành D\~ung \and Nicolas ``Koliaza'' Blanchard}
 \date{Novembre 2012}
 \maketitle
 
 \section{Présentation générale}
 
+\subsection{Avancement du projet}
+
+Pour l'instant, le lexer, le parser et le typeur ont été écrits, ce dernier
+ne faisant que vérifier que le programme est bien typé, sans produire l'arbre
+de syntaxe désucré et annoté qui servira de support à la production de code.
+
+\subsection{Compiler et exécuter}
+
+Le projet est muni d'un Makefile qui propose les cibles suivantes :
+\begin{description}
+\item[minic] la cible par défaut ; taper simplement \texttt{make} en ligne
+  de commande permet de produire l'exécutable \texttt{minic} du compilateur
+\item[tests] compile le compilateur si besoin est, puis lance une suite de tests
+\item[clean] nettoie le dossier du projet pour ne laisser que les sources
+\end{description}
+
+
+
 
 \section{Choix techniques}
 
+\subsection{Analyse lexicale}
 
- 
+Rather straightforward section.
+Parler de l'approche utilisée pour gérer les commentaires/whitespace avec
+des règles plutôt que des regex.
+% + Lexing.new_line
++ gestion des littéraux
+
+\subsection{Analyse syntaxique}
+
+Grammaire à peu près copiée sur la spécification du projet.
+Utilisation des fonctionnalités de Menhir :
+% règle paramétrée with_location, usage de inline, token error
+Dépendance sur le bon comportement de Menhir pour la résolution de conflits...
+côté ``black box'' insatisfaisant.
+
+\subsection{Vérification du typage}
+
+Code lourd, moche et bureaucratique !!!
+3 grosses fonctions, et une grosse déclaration de type.
+Usage important du pattern matching, et de petites fonctions pour éviter les redondances.
+%Gestion des erreurs, maybe_find, et passage des localisations partout.
+--> pourquoi pas de Map.find avec type option ?
+--> définition de fonctions locales currifiées dans chaque fonction pour
+  économiser de l'écriture
+Bénéfices potentiels des variables dynamically scoped.
+
+\subsection{Interaction utilisateur}
+
+\subsubsection{Point d'entrée du programme}
+
+main.ml
+utilise le module Arg --> option --help gratuite
+point central de gestion des exceptions
+
+\subsubsection{Suite de tests}
+
+Programme OCaml utilisant le module Unix pour exécuter minic sur tous les fichiers .c
+dans le dossier tests ; affiche les résultats sur stdout.
+Tous les tests ont l'air de fonctionner.
+Prévu pour Linux.
+
+\subsubsection{Chaîne de compilation}
+
+Ocamlbuild caché derrière make : marche sous Linux.
+Cibles minic, tests et clean. (mrproper --> useless)
+Sous Windows, difficultés rencontrées pour faire fonctionner Ocaml.
+
+
 \end{document}
