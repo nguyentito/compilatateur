@@ -36,20 +36,17 @@ and instr = instr_noloc * location
 and block = { block_locals : decl_var list ;
               block_instrs : instr list }
 
-type decl_typ_noloc = DStruct of string * decl_var list
+type decl_typ = DStruct of string * decl_var list
               | DUnion of string * decl_var list
 
-and decl_typ = decl_typ_noloc * location
-
-type decl_fun_noloc = { fun_name : string ;
+type decl_fun = { fun_name : string ;
                   fun_return_type : ctype ;
                   fun_args : decl_var list ;
                   fun_body : block }
-and decl_fun = decl_fun_noloc * location
 
 type decl_noloc = DVars of decl_var list
-          | DType of decl_typ
-          | DFun  of decl_fun
+                | DType of decl_typ
+                | DFun  of decl_fun
 and decl = decl_noloc * location
 
 type program = decl list

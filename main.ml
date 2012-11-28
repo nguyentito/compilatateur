@@ -8,9 +8,10 @@ let option_list = ["-parse-only", Arg.Set parse_only,
                   ]
 
 
-let signal_failure pos_start pos_end message f =
+(* Ne marche pas bien pour une bloc de code erroné sur plusieurs lignes *)
+let signal_failure filename pos_start pos_end message =
   Printf.eprintf "File \"%s\", line %d, characters %d-%d :\n%s\n"
-                 f pos_start.Lexing.pos_lnum
+                 filename pos_start.Lexing.pos_lnum
                  (pos_start.Lexing.pos_cnum - pos_start.Lexing.pos_bol)
                  (pos_end.Lexing.pos_cnum - pos_end.Lexing.pos_bol)
                  message;
@@ -19,14 +20,14 @@ let signal_failure pos_start pos_end message f =
 let main_exec filename =
   try
     let file = open_in filename in 
-
     let buf = Lexing.from_channel file in
-    let err msg = signal_failure (Lexing.lexeme_start_p buf)
-                                 (Lexing.lexeme_end_p buf)
-                                 msg
+    let syntax_error msg = signal_failure filename
+                                          (Lexing.lexeme_start_p buf)
+                                          (Lexing.lexeme_end_p buf)
+                                          msg
+                                          
     in
     try
-
       let file_parsed = Parser.parse_source_file Lexer.get_token buf in 
       if !parse_only then () 
       else
@@ -37,9 +38,10 @@ let main_exec filename =
             (); (* en attendant d'avoir fait la production de code*)
         end;
     with
-      | Failure s -> err s filename
-      | Parser.Error -> err "Syntax error" filename
-      | exn -> err ("Exception: " ^ Printexc.to_string exn) filename
+      | Failure s -> syntax_error s
+      | Parser.Error -> syntax_error "Syntax error"
+      | Typing.Error (err, (loc_start, loc_end)) ->
+          signal_failure filename loc_start loc_end "foobar"
 
   with 
     | Sys_error _  -> Printf.eprintf "%s : file not found" filename; exit 1

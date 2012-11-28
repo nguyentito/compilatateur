@@ -28,6 +28,9 @@ let initial_env = { env_vars = SMap.empty ;
 (* Note : the OCaml stdlib doesn't define a find function which uses an option
    type instead of the Not_found exception to signal failure
    This is f**king stupid ! *)
+
+(* Utility functions to lookup the environment *)
+
 let maybe_find f = try Some (f ()) with Not_found -> None
 let maybe_find_in_env f x env = maybe_find (fun () -> SMap.find x (f env))
 let lookup_var      = maybe_find_in_env (fun e -> e.env_vars)
@@ -40,20 +43,56 @@ let rec assoc_field_type x = function
   | (v,k)::_ when k = x -> Some v
   | _::q -> assoc_field_type x q
 
-let get_option_with_exn x exn = match x with
-  | None   -> raise exn
+
+(** The big list of semantic errors **)
+
+type semantic_error =
+
+(* Most basic error of all *)
+  | TypeMismatch
+
+(* These identifiers came out of nowhere ! *)
+  | UnknownVar
+  | UnknownStruct
+  | UnknownUnion
+  | UnknownStructField
+  | UnknownUnionField
+  | UnknownFunction
+      
+(* Not the right types for a primitive operator *)
+  | NonNumeric
+  | ArithFail (* le nom est pas terrible *)
+  | NonNumericCondition (* for if/while/for *)
+      
+(* What you tried to do made no sense ! *)
+  | InvalidLValue
+  | InvalidPointer
+  | InvalidArgumentList (* it means the arg list was not the right length *)
+  | NonComposite (* composite = struct or union *)
+
+(* Void is not a value type ! *)
+  | SizeofVoid
+  | InvalidReturnVoid
+  | VoidVariable
+
+(* Uniqueness of identifiers *)
+  | NonUniqueStructId
+  | NonUniqueUnionId
+  | NonUniqueField
+  | NonUniqueGlobal
+  | NonUniqueLocal
+
+(* Incorrect type expressions *)
+  | MalformedType
+  | SelfReferentialType
+      
+exception Error of semantic_error * location
+
+let get_option_with_exn loc x err = match x with
+  | None   -> raise (Error (err, loc))
   | Some y -> y
 
-(* Pas très joli... *)
-let (<??>) x exn = get_option_with_exn x exn
-
-(* General utility function, useful for modifying the environment *)
-let left_biased_merge =
-  let f k a b = match (a,b) with
-    | (Some x, _) -> Some x
-    | (None, _) -> b
-  in
-  SMap.merge f
+let raise_err_with_loc loc err = raise (Error (err,loc))
 
 
 (** Small definitions **)
@@ -80,7 +119,7 @@ let is_ptr = function
 let rec lvalue = function
   | Var   _ -> true
   | Deref _ -> true
-  | Subfield (e, _) -> lvalue e
+  | Subfield ((e,_), _) -> lvalue e
   | _ -> false
 
 
@@ -101,6 +140,36 @@ let rec well_formed env = function
   | Union s -> lookup_union s env <> None
   | Pointer t -> well_formed env t
 
+(** Assertions **)
+
+let assert_num loc t =
+  if not (is_num t) then raise_err_with_loc loc NonNumeric
+let assert_eqv loc t1 t2 =
+  if not (t1 === t2) then raise_err_with_loc loc TypeMismatch
+let assert_well_formed loc env t =
+  if not (well_formed env t) then raise_err_with_loc loc MalformedType
+
+
+(** The typing environment, part 2 :
+    utility functions to modify the environment **)
+
+let left_biased_merge =
+  let f k a b = match (a,b) with
+    | (Some x, _) -> Some x
+    | (None, _) -> b
+  in
+  SMap.merge f
+
+(* Use with fold_left, and provide the environment and location *)
+let add_var_with_err loc env err var_map (typ,var) =
+  if SMap.mem var var_map
+  then raise_err_with_loc loc err
+  else begin 
+    assert_well_formed loc env typ;
+    if typ = Void then raise_err_with_loc loc VoidVariable;
+    SMap.add var typ var_map
+  end
+
 
 (*** The core of the type checker ***)
 
@@ -113,125 +182,104 @@ let rec well_formed env = function
    Come up with relevant human-readable error messages to print
 *)
 
-(* Most basic error of all *)
-exception TypeMismatch
+let rec type_expr env (expr, loc) =
+  (* This can't be just partially applied because it would be restricted
+     to a monomorphic function *)
+  let (<??>) x err = get_option_with_exn loc x err in
+  let raise_err = raise_err_with_loc loc in
 
-(* These identifiers came out of nowhere ! *)
-exception UnknownVar
-exception UnknownStruct
-exception UnknownUnion
-exception UnknownStructField
-exception UnknownUnionField
-exception UnknownFunction
+  let assert_lvalue e = if not (lvalue e) then raise_err InvalidLValue in
 
-(* Not the right types for a primitive operator *)
-exception NonNumeric
-exception ArithFail (* le nom est pas terrible *)
-exception SizeofVoid
+  begin match expr with
+    | IntV x when x = Int32.zero -> TypeNull
 
-(* What you tried to do made no sense ! *)
-exception InvalidLValue
-exception InvalidPointer
-exception InvalidArgumentList (* it means the arg list was not the right length *)
-exception NonComposite (* composite = struct or union *)
+    | IntV    _ -> Int
+    | StringV _ -> Pointer Char
 
-(* Others *)
-exception MalformedType
+    | Var x -> lookup_var x env <??> UnknownVar
 
-let assert_num t = if is_num t then t else raise NonNumeric
-let assert_eqv t1 t2 = if t1 === t2 then t1 else raise TypeMismatch
-let assert_well_formed env t = if well_formed env t then t else raise MalformedType
+    | Sizeof Void -> raise_err SizeofVoid
+    | Sizeof t -> assert_well_formed loc env t; Int
 
-let rec type_expr env = function
-  | IntV x when x = Int32.zero -> TypeNull
+    | Address (e, loc_e) -> if lvalue e
+                            then Pointer (type_expr env (e, loc_e))
+                            else raise_err_with_loc loc_e InvalidLValue
 
-  | IntV    _ -> Int
-  | StringV _ -> Pointer Char
-
-  | Var x -> lookup_var x env <??> UnknownVar
-
-  | Sizeof Void -> raise SizeofVoid
-  | Sizeof t -> ignore (assert_well_formed env t); Int
-
-  | Address e when lvalue e -> Pointer (type_expr env e)
-  | Address e               -> raise InvalidLValue
-
-  (* Dereferencing the literal 0 or an int/char is not allowed
-     (gcc does the same thing)
-     Remember : no casts !
-  *)
-  | Deref e -> begin match type_expr env e with
-                       | Pointer t -> t
-                       | _ -> raise InvalidPointer
-               end
-
-  | Subfield (e,x) -> begin
-      match type_expr env e with
+    (* Dereferencing the literal 0 or an int/char is not allowed
+       (gcc does the same thing)
+       Remember : no casts !
+    *)
+    | Deref e -> begin match type_expr env e with
+        | Pointer t -> t
+        | _ -> raise_err InvalidPointer
+    end
+      
+    | Subfield (e,x) -> begin match type_expr env e with
         | Struct s -> let fields = lookup_struct s env <??> UnknownStruct in
                       assoc_field_type x fields <??> UnknownStructField
         | Union s -> let fields = lookup_struct s env <??> UnknownUnion in
                      assoc_field_type x fields <??> UnknownUnionField
-        | _ -> raise NonComposite
-      end
+        | _ -> raise_err NonComposite
+    end
 
-  | Assign (l, r) when lvalue l ->
-      let tl = type_expr env l and tr = type_expr env r in
-      assert_eqv tl tr
-  | Assign (l,_) -> raise InvalidLValue
-  
-  | PreInc e | PreDec e | PostInc e | PostDec e ->
-      if not (lvalue e)
-      then raise InvalidLValue
-      else assert_num (type_expr env e)
+    | Assign ((l_noloc, _) as l, r) ->
+        assert_lvalue l_noloc;
+        let tl = type_expr env l and tr = type_expr env r in
+        assert_eqv loc tl tr;
+        tl
+          
+    | PreInc e | PreDec e | PostInc e | PostDec e ->
+        assert_lvalue (fst e);
+        let t = type_expr env e in
+        assert_num loc t;
+        t
       
-  | Positive e | Negative e -> if is_num_non_ptr (type_expr env e)
-                               then Int
-                               else raise ArithFail (* est-ce vraiment la bonne exception ? *)
-  | Not e -> ignore (assert_num (type_expr env e)); Int
+    | Positive e | Negative e -> if is_num_non_ptr (type_expr env e)
+                                 then Int
+                                 else raise_err ArithFail (* est-ce vraiment la bonne erreur ? *)
 
-
-  | Binop (op, e1, e2) -> begin
-      let t1 = type_expr env e1 and t2 = type_expr env e2 in
-      match op with
-        | Equal | Different | Less | LessEq | Greater | GreaterEq -> begin
-            ignore (assert_num t1); (* Perhaps define a InvalidOperand exception instead ? *)
-            ignore (assert_eqv t1 t2);
+    | Not e -> assert_num loc (type_expr env e); Int
+      
+    | Binop (op, e1, e2) -> begin
+        let t1 = type_expr env e1 and t2 = type_expr env e2 in
+        match op with
+          | Equal | Different | Less | LessEq | Greater | GreaterEq -> begin
+            assert_num loc t1; (* Perhaps define a InvalidOperand exception instead ? *)
+            assert_eqv loc t1 t2;
             Int
           end
-        | Mul | Div | Modulo | And | Or ->
-            if not (is_num_non_ptr t1) then raise ArithFail else begin
-              ignore (assert_eqv t1 t2);
+          | Mul | Div | Modulo | And | Or ->
+            if not (is_num_non_ptr t1) then raise_err ArithFail else begin
+              assert_eqv loc t1 t2;
               Int
             end
-        (* Remember to give different constructors
-           to int+int and ptr+int in the eventual typed AST *)
-        (* The following is a way to solve the non-determinism which appears
-           in the formal type system rules when trying to infer the type of 0+0 *)
-        | Add | Sub when t1 = TypeNull && t2 = TypeNull -> TypeNull
-        | Add | Sub when is_num_non_ptr t1 && (t1 === t2) -> Int
-        (* Note : void* + int = void*, but typenull + int = int *)
-        | Add | Sub when is_ptr t1 && is_num_non_ptr t2 -> t1
-        | Add       when is_num_non_ptr t1 && is_ptr t2 -> t2
-        | Sub when is_ptr t1 && t1 === t2 -> Int
-        | Add | Sub (* all other cases *) -> raise ArithFail
-        (* I'm not convinced all the above code actually does the Right Thing,
-           but whatever... *)
+          (* Remember to give different constructors
+             to int+int and ptr+int in the eventual typed AST *)
+          (* The following is a way to solve the non-determinism which appears
+             in the formal type system rules when trying to infer the type of 0+0 *)
+          | Add | Sub when t1 = TypeNull && t2 = TypeNull -> TypeNull
+          | Add | Sub when is_num_non_ptr t1 && (t1 === t2) -> Int
+          (* Note : void* + int = void*, but typenull + int = int *)
+          | Add | Sub when is_ptr t1 && is_num_non_ptr t2 -> t1
+          | Add       when is_num_non_ptr t1 && is_ptr t2 -> t2
+          | Sub when is_ptr t1 && t1 === t2 -> Int
+          | Add | Sub (* all other cases *) -> raise_err ArithFail
+          (* I'm not convinced all the above code actually does the Right Thing,
+             but whatever... *)
     end
 
   | Apply (fn, args) ->
-      let (return_type, arg_types) = lookup_function fn env
-                                   <??> UnknownFunction in
+      let (return_type, arg_types) = lookup_function fn env <??> UnknownFunction in
       begin
         try
-          List.iter2 (fun t e -> ignore (assert_eqv t (type_expr env e)))
+          List.iter2 (fun t e -> assert_eqv loc t (type_expr env e))
                      arg_types args
         with
           (* raised by iter2 when the lists have different lengths *)
-          | Invalid_argument _ -> raise InvalidArgumentList
+          | Invalid_argument _ -> raise_err InvalidArgumentList
       end;
       return_type
-
-let _ = ()
+  end
 
 (** Type checking of instructions **)
 
@@ -239,77 +287,63 @@ let _ = ()
    d'une instruction en liste d'instructions qu'on concaténera
    d'où emptyinstr -> [] par exemple *)
 
-exception InvalidReturnVoid
-exception VoidVariable
-exception NonUniqueLocal
-
-(* Very useful when used with List.fold_left
-   Suggestion : move this under the "typing environment" section *)
-let add_var_with_exn env exn var_map (typ,var) =
-  if SMap.mem var var_map
-  then raise exn
-  else begin 
-    ignore (assert_well_formed env typ);
-    if typ = Void then raise VoidVariable;
-    SMap.add var typ var_map
-  end
-
 (* For now, this function returns () if the instruction is well-typed,
    else it throws an exception *)
 
-let rec typecheck_instr ret_type env = function
-  | EmptyInstr -> ()
-  | ExecExpr e -> ignore (type_expr env e)
+let rec typecheck_instr ret_type env (instr, loc) =
+  let raise_err = raise_err_with_loc loc in
 
-  | Return None when ret_type = Void -> ()
-  | Return None                      -> raise InvalidReturnVoid
-  | Return (Some e) -> (* problem : do we allow return f(); with void* f() ? *)
-      ignore (assert_eqv ret_type (type_expr env e))
+  let assert_valid_cond e =
+    let t = type_expr env e in
+    if not (is_num t) then raise_err_with_loc loc NonNumericCondition
+  in
 
-  | IfThenElse (e, i1, i2) -> begin
-      ignore (assert_num (type_expr env e));
-      ignore (typecheck_instr ret_type env i1);
-      ignore (typecheck_instr ret_type env i2)
+  begin match instr with
+    | EmptyInstr -> ()
+    | ExecExpr e -> ignore (type_expr env e)
+
+    | Return None when ret_type = Void -> ()
+    | Return None                      -> raise_err InvalidReturnVoid
+    | Return (Some e) -> (* problem : do we allow return f(); with void f() ? *)
+        if not (ret_type === type_expr env e) then raise_err TypeMismatch 
+
+    | IfThenElse (e, i1, i2) -> begin
+        assert_valid_cond e;
+        ignore (typecheck_instr ret_type env i1);
+        ignore (typecheck_instr ret_type env i2)
     end
-  | While (e,i) -> begin
-      ignore (assert_num (type_expr env e));
-      ignore (typecheck_instr ret_type env i)
+    | While (e,i) -> begin
+        assert_valid_cond e;
+        ignore (typecheck_instr ret_type env i)
     end
 
-  (* Dans le nouvel AST, il faudra transformer ça en boucle while,
-     et ça va pas être très beau...
-     Au moins, il n'y aura pas à gérer le comportement de break/continue *)
-  | For (init, cond_option, update, body) -> begin
-      List.iter (fun e -> ignore (type_expr env e)) init;
-      begin match cond_option with
-        | Some cond -> ignore (assert_num (type_expr env cond))
-        | None -> ()
-      end;
-      List.iter (fun e -> ignore (type_expr env e)) update;
-      typecheck_instr ret_type env body
+    (* Dans le nouvel AST, il faudra transformer ça en boucle while,
+       et ça va pas être très beau...
+       Au moins, il n'y aura pas à gérer le comportement de break/continue *)
+    | For (init, cond_option, update, body) -> begin
+        List.iter (fun e -> ignore (type_expr env e)) init;
+        begin match cond_option with
+          | Some cond -> assert_valid_cond cond
+          | None -> ()
+        end;
+        List.iter (fun e -> ignore (type_expr env e)) update;
+        typecheck_instr ret_type env body
     end 
 
-  | Block b -> begin
-      (* local declarations override global declarations *)
-      let local_vars_map = List.fold_left (add_var_with_exn env NonUniqueLocal)
-                                          SMap.empty b.block_locals in
+    | Block b -> begin
+        (* local declarations override global declarations *)
+        let local_vars_map = List.fold_left (add_var_with_err loc env NonUniqueLocal)
+                                            SMap.empty b.block_locals in
       let new_env = { env_vars = left_biased_merge local_vars_map env.env_vars ;
                       env_structs = env.env_structs ;
                       env_unions = env.env_unions ;
                       env_functions = env.env_functions } in
       List.iter (fun instr -> typecheck_instr ret_type new_env instr) b.block_instrs
-    end
+  end
+end
 
 
 (** Type checking of entire programs **)
-
-exception SelfReferentialType
-
-(* Uniqueness of identifiers *)
-exception NonUniqueStructId
-exception NonUniqueUnionId
-exception NonUniqueField
-exception NonUniqueGlobal
 
 (* Idée : dans l'AST typé, ne pas garder les DVars qui correspondent à
    des déclarations du genre int *a, b, ***c; mais avoir 1 déclaration
@@ -324,85 +358,88 @@ exception NonUniqueGlobal
 
 let typecheck_program program =
 
-  let assert_valid_fields env self_type fields = 
-    let rec assert_unique_fields = function (* O(n^2), deal with it =p *)
+  (* the folding function which check the soundness of
+     the declaration and adds it to the environment *)
+  let f env (decl,loc) = 
+    
+    (* the repetition of this line of code would be avoided
+       with a dynamically scoped variable for the current location *)
+    let raise_err = raise_err_with_loc loc in
+    
+    (* In the case of a structure or a union,
+       ensure the fields are all well-formed and unique *)
+    let rec assert_unique_fields = function
       | [] -> ()
       | (_,f)::q -> if List.exists (fun (_,f') -> f' = f) q
-                    then raise NonUniqueField
-                    else assert_unique_fields q
+                    then raise_err NonUniqueField
+                    else assert_unique_fields q (* O(n^2), deal with it =p *)
     in    
-    let rec is_recursive_pointer0 = function
-      | Pointer t -> is_recursive_pointer0 t
+    let rec is_recursive_pointer self_type = function
+      | Pointer t -> is_recursive_pointer self_type t
       | t when t = self_type -> true
       | _ -> false
     in
-    let is_recursive_pointer = function
-      | Pointer t -> is_recursive_pointer0 t
-        (* Oui, c'est moche de lever une exception dans ce qui est censé être
-           un prédicat purement fonctionnel, mais c'est pas si grave
-           TODO : améliorer ça pour rendre le code plus professionnel *)
-      | t when t = self_type -> raise SelfReferentialType
-      | _ -> false
+    let assert_valid_field self_type = function
+      | (Void, _) -> raise_err VoidVariable
+      | (t, _) when t = self_type -> raise_err SelfReferentialType
+      | (Pointer t', _) when is_recursive_pointer self_type t' -> ()
+      | (t, _) -> assert_well_formed loc env t
     in
-
-    List.iter (fun (t,_) -> if not (is_recursive_pointer t)
-                            then ignore (assert_well_formed env t);
-                            if t = Void then raise VoidVariable)
-              fields;
-    assert_unique_fields fields
-  in
-
-  let f env = function (* the folding function which check the soundness of
-                          the declaration and adds it to the environment *)
-    | DVars global_vars ->
-        let new_vars_map = List.fold_left (add_var_with_exn env NonUniqueGlobal)
+    let assert_valid_fields self_type fields =
+      List.iter (assert_valid_field self_type) fields;
+      assert_unique_fields fields
+    in
+      
+    match decl with
+      | DVars global_vars ->
+        let new_vars_map = List.fold_left (add_var_with_err loc env NonUniqueGlobal)
                                           env.env_vars global_vars in
         (* Note : global vars and functions are in the same namespace ! *)
         if List.exists (fun (_,var) -> SMap.mem var env.env_functions)
                        global_vars
-        then raise NonUniqueGlobal;
+        then raise_err NonUniqueGlobal;
         { env_vars = new_vars_map ;
           env_structs = env.env_structs ;
           env_unions = env.env_unions ;
           env_functions = env.env_functions }
 
-    | DType (DStruct (name, fields)) ->
-        if SMap.mem name env.env_structs then raise NonUniqueStructId
+      | DType (DStruct (name, fields)) ->
+        if SMap.mem name env.env_structs then raise_err NonUniqueStructId
         else begin
-          assert_valid_fields env (Struct name) fields;
+          assert_valid_fields (Struct name) fields;
           { env_vars = env.env_vars ;
             env_structs = SMap.add name fields env.env_structs ;
             env_unions = env.env_unions ;
             env_functions = env.env_functions }
         end
 
-    | DType (DUnion (name, fields)) ->
-        if SMap.mem name env.env_unions then raise NonUniqueUnionId
+      | DType (DUnion (name, fields)) ->
+        if SMap.mem name env.env_unions then raise_err NonUniqueUnionId
         else begin
-          assert_valid_fields env (Union name) fields;
+          assert_valid_fields (Union name) fields;
           { env_vars = env.env_vars ;
             env_structs = env.env_structs ;
             env_unions = SMap.add name fields env.env_unions ;
             env_functions = env.env_functions }
         end
 
-    | DFun fn -> begin
+      | DFun fn -> begin
         (* Refer to previous note on namespaces *)
         if SMap.mem fn.fun_name env.env_vars ||
            SMap.mem fn.fun_name env.env_functions
-        then raise NonUniqueGlobal;
+        then raise_err NonUniqueGlobal;
         let fn_proto = (fn.fun_return_type, List.map fst fn.fun_args) in
 
-        let arg_map = List.fold_left (add_var_with_exn env NonUniqueLocal)
+        let arg_map = List.fold_left (add_var_with_err loc env NonUniqueLocal)
                                      SMap.empty fn.fun_args in
-        List.iter (fun (_,var) -> if SMap.mem var arg_map then raise NonUniqueLocal)
+        List.iter (fun (_,var) -> if SMap.mem var arg_map then raise_err NonUniqueLocal)
                   fn.fun_body.block_locals;
         let function_env =  { env_vars = left_biased_merge arg_map env.env_vars ;
                               env_structs = env.env_structs ;
                               env_unions = env.env_unions ;
                               env_functions = SMap.add fn.fun_name fn_proto
                                                        env.env_functions } in
-        typecheck_instr fn.fun_return_type function_env (Block fn.fun_body);
+        typecheck_instr fn.fun_return_type function_env ((Block fn.fun_body), loc);
 
         { env_vars = env.env_vars ;
           env_structs = env.env_structs ;

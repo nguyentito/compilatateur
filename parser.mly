@@ -53,11 +53,10 @@ decl : d = with_location(decl_noloc) {d}
 decl_vars: t = typ ; vars = separated_nonempty_list(Comma, var) ; Semicolon
     { List.map (fun (n, id) -> (multi_pointer t n, id)) vars }
 
-decl_typ_noloc: k = type_keyword ; id = Ident ; LCurly fs = decl_vars* RCurly ; Semicolon
+decl_typ: k = type_keyword ; id = Ident ; LCurly fs = decl_vars* RCurly ; Semicolon
     { k (id, List.concat fs) }
-decl_typ : d = with_location(decl_typ_noloc) {d}
 
-decl_fun_noloc: tv = typed_var
+decl_fun: tv = typed_var
           LParen args = separated_list(Comma, typed_var) RParen
           b = block
     { let (t, name) = tv in
@@ -65,7 +64,7 @@ decl_fun_noloc: tv = typed_var
         Ast.fun_return_type = t ;
         Ast.fun_args = args ;
         Ast.fun_body = b } }
-decl_fun : d = with_location(decl_fun_noloc) {d}
+
 (* dunno why, but without the %inline, the reduction
    type_keyword -> Struct or Union would never be applied *)
 %inline type_keyword:
