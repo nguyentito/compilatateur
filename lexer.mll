@@ -37,29 +37,37 @@ rule get_token = parse
   | "//" { comment_oneliner lexbuf }
   | "/*" { comment_c89 lexbuf }
 
+  (* Keywords *)
   | "char" {Char}  | "else" {Else}  | "for" {For}  | "if" {If} | "int" {Int}
   | "return" {Return}  | "sizeof" {Sizeof}  | "struct" {Struct}
   | "union" {Union}  | "void" {Void} | "while" {While}
 
+  (* Identifiers *)
   | ident as a {Ident a}
+  
+  (* Literals *)
   | string as s {StringV s}
-
   | "0x" (digit_hex+ as s) { read_base 16 Int32.zero (Lexing.from_string s) }
   | ('0' digit_oct*) as s  { read_base 8  Int32.zero (Lexing.from_string s) }
-  | digit+           as s  { read_base 10 Int32.zero (Lexing.from_string s) }
+  | ([1 - 9] digit*) as s  { read_base 10 Int32.zero (Lexing.from_string s) }
   | "'" character "'" as s { read_character s }
 
+  (* Delimiters *)
   | '(' {LParen}  | ')' {RParen}
   | '[' {LBracket}  | ']' {RBracket}
   | '{' {LCurly}  | '}' {RCurly}
 
+  (* Punctuation (note : the colon is actually useless) *)
   | ',' {Comma} | ';' {Semicolon} | ':' {Colon}
 
+  (* Operators *)
   | "->" {Arrow}  | '.' {Dot}  | '=' {Assign}  | '&' {Address}
   | "==" {Equal}  | "!=" {Different}  | "||" {Or}  | "&&" {And} | '!' {Not} 
   | '<' {Less}  | "<=" {LessEq}  | '>' {Greater}  | ">=" {GreaterEq}
   | '+' {Plus}   | '-' {Minus}   | '*' {Star}  | '/' {Divide} | '%' {Modulo}  
   | "++" {Increment} | "--" {Decrement}
+
+  (* Never forget this ! *)
   | eof {Eof}
 
 and comment_oneliner = parse

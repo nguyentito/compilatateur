@@ -4,6 +4,7 @@
 \usepackage{lmodern}
 \usepackage[french]{babel}
 \usepackage{fullpage}
+\usepackage{listings}
  
 \begin{document}
  
@@ -16,9 +17,7 @@
 
 \subsection{Avancement du projet}
 
-Pour l'instant, le lexer, le parser et le typeur ont été écrits, ce dernier
-ne faisant que vérifier que le programme est bien typé, sans produire l'arbre
-de syntaxe désucré et annoté qui servira de support à la production de code.
+Pour l'instant, le lexer, le parser et le typeur ont été écrits.
 
 \subsection{Compiler et exécuter}
 
@@ -31,19 +30,71 @@ Le projet est muni d'un Makefile qui propose les cibles suivantes :
 \end{description}
 
 
-
-
 \section{Choix techniques}
+
+\subsection{Considérations globales}
+
+Le projet a été réalisé avec un choix d'outils de programmation plutôt conventionnel :
+OCaml/OCamllex/Menhir. Il s'est inspiré d'exemples donnés en cours et en TD, notamment
+le parser mini-Pascal.
+
+\subsubsection{Structure du programme}
+
+Le compilateur a été découpé en les grandes phases suivantes :
+\begin{itemize}
+\item Analyse lexicale
+\item Analyse syntaxique
+\item Typage / analyse sémantique
+\item Production de code
+\end{itemize}
+
+Chacun de ces modules est contenu dans un fichier \texttt{.ml}, avec de plus
+un fichier \texttt{.mli} permettant de restreindre les fonctions et types
+visibles depuis l'extérieur (cas particulier : le fichier d'interface du parser
+est généré automatiquement par Menhir).
+
+Il y a de plus un fichier \texttt{main.ml} contenant le point d'entrée du programme :
+il s'occupe d'effectuer le lien entre les fonctions contenues dans ces modules,
+afin de pouvoir véritablement compiler un fichier source fourni par l'utilisateur.
+
+\subsubsection{Chaîne de compilation}
+
+Si l'usage du Makefile permet de présenter une interface familière aux
+utilisateurs de systèmes Unix voulant le compiler, il ne fait en fait que cacher
+des appels à Ocamlbuild, un système de build qui calcule les dépendances
+entre fichiers sources OCaml et les compile dans l'ordre, et peut appeler automatiquement
+Ocamllex et Menhir. Ainsi le Makefile est très simple, il ne fait que 11 lignes !
 
 \subsection{Analyse lexicale}
 
-Rather straightforward section.
-Parler de l'approche utilisée pour gérer les commentaires/whitespace avec
-des règles plutôt que des regex.
-% + Lexing.new_line
-+ gestion des littéraux
+Le lexer est généré par Ocamllex à partir du fichier \texttt{lexer.mll}.
+
+L'écriture du lexer n'a pas en général posé de problème, c'était la section la plus
+simple du projet.
+
+Une subtilité cependant dans le fonctionnement de Ocamllex : il faut explicitement lui
+indiquer les changements de ligne en appelant la fonction \texttt{Lexing.new\_line} sur
+le buffer. Sinon, les informations de position données par \texttt{Lexing.lexeme\_start\_p},
+ou encore par \texttt{\$startpos} et \texttt{\$endpos} dans Menhir, n'indiqueront pas
+le bon numéro de ligne. Ce problème nous a forcé à abandonner une première approche pour
+la gestion des blancs et des commentaires basée sur une reconnaissance par expression
+rationnelle et élimination directe ; nous avons dû les traiter en rajoutant des règles
+dans le lexer, pour obtenir un comportement correct à la lecture de \texttt{'\textbackslash n'}.
+Notons le gain de lisibilité obtenu par rapport à la regex des commentaires que nous avions :
+\begin{lstlisting}[language=Caml]
+let comment = "//" [^ '\n']*
+            | "/*" ([^ '*'] | ('*'* [^ '/' '*']))* '*'* "*/"
+\end{lstlisting}
+
+Pour gérer les constantes littérales, nous avons choisi de récupérer d'abord la chaîne
+de caractères les représentant grâce à une regex, puis de déchiffrer cette chaîne grâce
+à des fonctions auxiliaires. Dans le cas des entiers, la fonction de lecture est en fait
+une règle du lexer que l'on applique non pas à \texttt{lexbuf}, mais à un buffer créé
+à partir de la chaîne.
 
 \subsection{Analyse syntaxique}
+
+Le parser est généré par Menhir à partir du fichier \texttt{parser.mly}.
 
 Grammaire à peu près copiée sur la spécification du projet.
 Utilisation des fonctionnalités de Menhir :
@@ -69,6 +120,7 @@ Usage important du pattern matching, et de petites fonctions pour éviter les re
 --> définition de fonctions locales currifiées dans chaque fonction pour
   économiser de l'écriture
 Bénéfices potentiels des variables dynamically scoped.
+Poids en lignes de code des messages d'erreur...
 
 \subsection{Interaction utilisateur}
 
@@ -87,11 +139,6 @@ dans le dossier tests ; affiche les résultats sur stdout.
 Tous les tests ont l'air de fonctionner.
 Prévu pour Linux.
 
-\subsubsection{Chaîne de compilation}
-
-Ocamlbuild caché derrière make : marche sous Linux.
-Cibles minic, tests et clean. (mrproper --> useless)
-Sous Windows, difficultés rencontrées pour faire fonctionner Ocaml.
 
 
 \end{document}
