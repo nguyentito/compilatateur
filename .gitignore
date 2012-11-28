@@ -1,6 +1,8 @@
+*~
 *.cmo
 *.cmi
+*.native
 parser.automaton
 parser.conflicts
 _build
-x
+minic

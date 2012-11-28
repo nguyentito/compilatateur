@@ -28,20 +28,18 @@ let main_exec filename =
                                           
     in
     try
-      let file_parsed = Parser.parse_source_file Lexer.get_token buf in 
-      if !parse_only then () 
-      else
-        begin
-          Typing.typecheck_program file_parsed;
-          if !type_only then ()
-          else
-            (); (* en attendant d'avoir fait la production de code*)
-        end;
+      let program_ast = Parser.parse_source_file Lexer.get_token buf in 
+      if not !parse_only then begin
+        Typing.typecheck_program program_ast;
+        if not !type_only then begin
+          () (* production de code à venir *)
+        end
+      end;
     with
       | Failure s -> syntax_error s
       | Parser.Error -> syntax_error "Syntax error"
       | Typing.Error (err, (loc_start, loc_end)) ->
-          signal_failure filename loc_start loc_end "foobar"
+          signal_failure filename loc_start loc_end (Typing.error_message err)
 
   with 
     | Sys_error _  -> Printf.eprintf "%s : file not found" filename; exit 1

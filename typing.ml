@@ -58,7 +58,7 @@ type semantic_error =
   | UnknownStructField
   | UnknownUnionField
   | UnknownFunction
-      
+
 (* Not the right types for a primitive operator *)
   | NonNumeric
   | ArithFail (* le nom est pas terrible *)
@@ -448,3 +448,8 @@ let typecheck_program program =
       end
   in
   ignore (List.fold_left f initial_env program)
+
+
+(*** Le meilleur pour la fin : les messages d'erreur ! ***)
+
+let error_message _ = "foobarbaz"
