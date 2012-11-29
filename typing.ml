@@ -85,8 +85,10 @@ type semantic_error =
 (* Incorrect type expressions *)
   | MalformedType of ctype
   | SelfReferentialType of ctype
-      
-exception Error of semantic_error * location
+
+exception Error of semantic_error * Ast.location
+exception NoMainFunction
+exception InvalidMainFunction
 
 let get_option_with_exn loc x err = match x with
   | None   -> raise (Error (err, loc))
@@ -124,13 +126,6 @@ let rec lvalue = function
 
 
 (** Well-formed types **)
-
-(* Possible improvement : exceptions describing the errors
-   instead of just true/false
-   One possible solution would be to move all the exceptions
-   to the very top of the file, so that they could be thrown
-   from anywhere
- *)
 
 let rec well_formed env = function
   | TypeNull -> assert false
@@ -448,8 +443,11 @@ let typecheck_program program =
           env_functions = SMap.add fn.fun_name fn_proto env.env_functions }
       end
   in
-  (* Ne pas oublier après de vérifier la présence d'un main() *)
-  ignore (List.fold_left f initial_env program)
+  let final_env = List.fold_left f initial_env program in
+  match lookup_function "main" final_env with
+    | None -> raise NoMainFunction
+    | Some (Int, []) | Some (Int, [Int; Pointer (Pointer Char)]) -> ()
+    | _ -> raise InvalidMainFunction
 
 
 (*** Le meilleur pour la fin : les messages d'erreur ! ***)

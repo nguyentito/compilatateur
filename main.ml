@@ -50,6 +50,10 @@ let main_exec filename =
       | Parser.Error -> syntax_error "Syntax error"
       | Typing.Error (err, (loc_start, loc_end)) ->
           signal_failure filename loc_start loc_end (Typing.error_message err)
+      | Typing.NoMainFunction -> 
+          Printf.eprintf "File \"%s\", line 1, characters 0-0 :\nno main function\n" filename
+      | Typing.InvalidMainFunction ->
+          Printf.eprintf "File \"%s\", line 1, characters 0-0 :\ninvalid main function\n" filename
 
   with 
     | Sys_error _  -> Printf.eprintf "%s : file not found" filename; exit 2
