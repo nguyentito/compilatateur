@@ -24,7 +24,7 @@ let signal_failure filename pos_start pos_end message =
                 then pos_end.Lexing.pos_cnum - pos_end.Lexing.pos_bol
                 else start_col
   in
-  Printf.eprintf "File \"%s\", line %d, characters %d-%d :\n%s\n"
+  Printf.eprintf "File \"%s\", line %d, characters %d-%d:\n%s\n"
                  filename line_num start_col end_col message;
   exit 1
 

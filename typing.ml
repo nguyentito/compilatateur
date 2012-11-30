@@ -25,19 +25,20 @@ let initial_env = { env_vars = SMap.empty ;
                     env_unions = SMap.empty ;
                     env_functions = initial_fun_map }
 
-(* Note : the OCaml stdlib doesn't define a find function which uses an option
-   type instead of the Not_found exception to signal failure
-   This is f**king stupid ! *)
-
 (* Utility functions to lookup the environment *)
 
+(* Note : the OCaml stdlib doesn't define a find function which uses an option
+   type instead of the Not_found exception to signal failure *)
 let maybe_find f = try Some (f ()) with Not_found -> None
 let maybe_find_in_env f x env = maybe_find (fun () -> SMap.find x (f env))
+
 let lookup_var      = maybe_find_in_env (fun e -> e.env_vars)
 let lookup_struct   = maybe_find_in_env (fun e -> e.env_structs)
 let lookup_union    = maybe_find_in_env (fun e -> e.env_unions)
 let lookup_function = maybe_find_in_env (fun e -> e.env_functions)
 
+(* field name -> list of fields in a struct/union -> data type of the field
+   (if it exists, else None) *)
 let rec assoc_field_type x = function
   | [] -> None
   | (v,k)::_ when k = x -> Some v
@@ -97,10 +98,13 @@ let get_option_with_exn loc x err = match x with
 let raise_err_with_loc loc err = raise (Error (err,loc))
 
 
-(** Small definitions **)
+(** Small definitions (see project specifications) **)
 
 let is_num_non_ptr t = List.mem t [Int; Char; TypeNull] 
 
+(* Note : according to the formal definition of === in the spec,
+   int === char but int* =/= char*. A recursive version is needed
+   if the relation actually commutes with pointers *)
 let (===) a b = match (a,b) with
   | _ when a = b -> true
   | _ when is_num_non_ptr a && is_num_non_ptr b -> true
@@ -123,9 +127,6 @@ let rec lvalue = function
   | Deref _ -> true
   | Subfield ((e,_), _) -> lvalue e
   | _ -> false
-
-
-(** Well-formed types **)
 
 let rec well_formed env = function
   | TypeNull -> assert false
@@ -169,13 +170,6 @@ let add_var_with_err loc env err var_map (typ,var) =
 (*** The core of the type checker ***)
 
 (** Type checking and inference for expressions **)
-
-(* A lot of possible semantic errors !
-   TODO :
-   Add location info later
-   Add arguments to the exceptions to allow precise diagnostics
-   Come up with relevant human-readable error messages to print
-*)
 
 let rec type_expr env (expr, loc) =
   (* This can't be just partially applied because it would be restricted
@@ -279,7 +273,7 @@ let rec type_expr env (expr, loc) =
 (** Type checking of instructions **)
 
 (* Idée : lors de la génération de l'AST typé, permettre la transformation
-   d'une instruction en liste d'instructions qu'on concaténera
+   d'une instruction en liste d'instructions qu'on concatènera
    d'où emptyinstr -> [] par exemple *)
 
 (* For now, this function returns () if the instruction is well-typed,
@@ -305,16 +299,16 @@ let rec typecheck_instr ret_type env (instr, loc) =
 
     | IfThenElse (e, i1, i2) -> begin
         assert_valid_cond e;
-        ignore (typecheck_instr ret_type env i1);
-        ignore (typecheck_instr ret_type env i2)
+        typecheck_instr ret_type env i1;
+        typecheck_instr ret_type env i2
     end
     | While (e,i) -> begin
         assert_valid_cond e;
-        ignore (typecheck_instr ret_type env i)
+        typecheck_instr ret_type env i
     end
 
     (* Dans le nouvel AST, il faudra transformer ça en boucle while,
-       et ça va pas être très beau...
+       et ça ne va pas être très beau...
        Au moins, il n'y aura pas à gérer le comportement de break/continue *)
     | For (init, cond_option, update, body) -> begin
         List.iter (fun e -> ignore (type_expr env e)) init;
@@ -354,7 +348,7 @@ end
 
 let typecheck_program program =
 
-  (* the folding function which check the soundness of
+  (* the folding function which checks the soundness of
      the declaration and adds it to the environment *)
   let f env (decl,loc) = 
     

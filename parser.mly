@@ -88,7 +88,7 @@ expr_noloc:
   | id = Ident  { Ast.Var     id }
 
   | Star e = expr { Ast.Deref e }
- | a = expr LBracket i = expr RBracket
+  | a = expr LBracket i = expr RBracket
         { Ast.Deref ( (Ast.Binop (Ast.Add, a, i)), ($startpos, $endpos)) }
 
   | s  = expr  Dot  f = Ident { Ast.Subfield (s, f) }
