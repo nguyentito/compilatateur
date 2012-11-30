@@ -59,8 +59,8 @@ rule get_token = parse
   | '[' {LBracket}  | ']' {RBracket}
   | '{' {LCurly}  | '}' {RCurly}
 
-  (* Punctuation (note : the colon is actually useless) *)
-  | ',' {Comma} | ';' {Semicolon} | ':' {Colon}
+  (* Punctuation *)
+  | ',' {Comma} | ';' {Semicolon}
 
   (* Operators *)
   | "->" {Arrow}  | '.' {Dot}  | '=' {Assign}  | '&' {Address}

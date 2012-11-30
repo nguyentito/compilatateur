@@ -8,7 +8,7 @@
 
 %token Eof
 %token Char Else For If Int Return Sizeof Struct Union Void While
-%token Comma Semicolon Colon
+%token Comma Semicolon
 %token Equal Different LessEq Less GreaterEq Greater
 %token Assign
 %token And Or Not
