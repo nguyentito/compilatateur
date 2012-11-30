@@ -1,6 +1,8 @@
 {
   open Parser
 
+  exception UnterminatedComment
+
   let digit_of_char c =
     if '0' <= c && c <= '9'
     then int_of_char c - int_of_char '0'
@@ -8,6 +10,7 @@
     
   let int32_digit_of_char c = Int32.of_int (digit_of_char c)
 
+  (* Decipher s, where 's' is a char literal *)
   let read_character s =
     let f = function
       | "\\\\" -> '\\' | "\\'" -> '\'' | "\\\"" -> '"'
@@ -80,13 +83,13 @@ and comment_oneliner = parse
 and comment_c89 = parse
   | "*/" { get_token lexbuf }
   | '\n' { Lexing.new_line lexbuf; comment_c89 lexbuf }
+  | eof { raise UnterminatedComment }
   | _ { comment_c89 lexbuf }
 
 and read_base b acc = parse
   | digit_hex as d { read_base b (Int32.add (int32_digit_of_char d)
                                             (Int32.mul (Int32.of_int b) acc))
-                               lexbuf }
-  | eof { IntV acc } (* Useless... *)
+                                 lexbuf }
   | "" { IntV acc }
 
 {

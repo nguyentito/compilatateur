@@ -6,6 +6,8 @@
   let with_dummy_loc x = (x, (Lexing.dummy_pos, Lexing.dummy_pos))
 %}
 
+(*** Tokens, associativity, precedence ***)
+
 %token Eof
 %token Char Else For If Int Return Sizeof Struct Union Void While
 %token Comma Semicolon
@@ -29,17 +31,18 @@
 %left Star Divide Modulo
 %right Not Increment Decrement Address
 %nonassoc unary
-%left Arrow Dot
-%nonassoc strong
+%left LParen RParen LBracket RBracket Arrow Dot
+%nonassoc Else
 
-%start <Ast.program> parse_source_file
+%start <Ast.program> parse_source_file 
+
 
 %%
 
 with_location(X):
   | x = X { (x, ($startpos, $endpos)) }
 
-(* Grammar copied from the project specification *)
+(*** Grammar copied from the project specification ***)
 
 parse_source_file: ds = decl* ; Eof { ds }
  
@@ -85,7 +88,7 @@ expr_noloc:
   | id = Ident  { Ast.Var     id }
 
   | Star e = expr { Ast.Deref e }
-  | a = expr LBracket i = expr RBracket %prec strong
+ | a = expr LBracket i = expr RBracket
         { Ast.Deref ( (Ast.Binop (Ast.Add, a, i)), ($startpos, $endpos)) }
 
   | s  = expr  Dot  f = Ident { Ast.Subfield (s, f) }
@@ -93,7 +96,7 @@ expr_noloc:
 
   | l = expr Assign r = expr { Ast.Assign (l, r) }
 
-  | f = Ident LParen a = separated_list(Comma, expr) RParen %prec strong
+  | f = Ident LParen a = separated_list(Comma, expr) RParen
         { Ast.Apply (f, a) }
 
   | Increment e = expr { Ast.PreInc  e } %prec unary
@@ -105,8 +108,8 @@ expr_noloc:
   | Not     e = expr { Ast.Not e      } %prec unary
   | Plus    e = expr { Ast.Positive e } %prec unary (* it's actually useful for later *)
   | Minus   e = expr { Ast.Negative e } %prec unary
-
-  | Sizeof LParen t = typ stars = Star* RParen %prec strong
+  
+  | Sizeof LParen t = typ stars = Star* RParen
         { Ast.Sizeof (multi_pointer t (List.length stars)) }
   | LParen e = expr_noloc RParen { e }
 
@@ -123,7 +126,7 @@ expr:
   | Plus {Ast.Add} | Minus {Ast.Sub} | Star {Ast.Mul}
   | Divide {Ast.Div} | Modulo {Ast.Modulo}
 
-      
+
 instruction_noloc:
   | Semicolon { Ast.EmptyInstr }
   | e = expr Semicolon { Ast.ExecExpr e }
@@ -134,8 +137,9 @@ instruction_noloc:
      if(a) { if(b) c } else d,
    or
      if(a) { if(b) c else d }
-   ), and we rely on Menhir preferring shift over reduce to resolve
-   the conflict the "right way". (http://en.wikipedia.org/wiki/Dangling_else)
+   By setting an appropriate precedence level for the token Else,
+   we resolve this conflict in an unambiguous way.
+   (http://en.wikipedia.org/wiki/Dangling_else)
 *)
   | If LParen e = expr RParen i1 = instruction
         { Ast.IfThenElse (e, i1, with_dummy_loc Ast.EmptyInstr) }

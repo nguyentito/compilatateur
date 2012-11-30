@@ -47,6 +47,7 @@ let main_exec filename =
       end;
     with
       | Failure s -> syntax_error s (* en supposant que l'erreur vient du lexer... *)
+      | Lexer.UnterminatedComment -> syntax_error "Unterminated comment"
       | Parser.Error -> syntax_error "Syntax error"
       | Typing.Error (err, (loc_start, loc_end)) ->
           signal_failure filename loc_start loc_end (Typing.error_message err)
