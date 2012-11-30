@@ -46,6 +46,8 @@ rule get_token = parse
   | ident as a {Ident a}
   
   (* Literals *)
+  (* Note : StringV s contains the representation of the string as a literal,
+     i.e. the matched lexeme in the file, and not the string "itself" *)
   | string as s {StringV s}
   | "0x"  (digit_hex+ as s) { read_base 16 Int32.zero (Lexing.from_string s) }
   | ('0' digit_oct*)   as s { read_base 8  Int32.zero (Lexing.from_string s) }

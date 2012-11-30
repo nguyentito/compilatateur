@@ -9,7 +9,7 @@
 \begin{document}
  
 \title{Projet de compilation}
-\author{Nguy\~{\^e}n Lê Thành D\~ung \and Nicolas ``Koliaza'' Blanchard}
+\author{Nguy\~{\^e}n Lê Thành D\~ung \and Nicolas Koliaza Blanchard}
 \date{Novembre 2012}
 \maketitle
 
@@ -17,7 +17,13 @@
 
 \subsection{Avancement du projet}
 
-Pour l'instant, le lexer, le parser et le typeur ont été écrits.
+Pour l'instant, le lexer, le parser et le typeur ont été écrits. La version
+actuelle du typeur ne génère pas d'AST décoré, elle se contente de vérifier
+la correction du typage, l'unicité des définitions globales, etc. et renvoie
+\texttt{unit}.
+
+Le programme a été testé sur l'ensemble des fichiers de tests fournis, et
+se comporte dessus comme attendu.
 
 \subsection{Compiler et exécuter}
 
@@ -27,6 +33,17 @@ Le projet est muni d'un Makefile qui propose les cibles suivantes :
   de commande permet de produire l'exécutable \texttt{minic} du compilateur
 \item[tests] compile le compilateur si besoin est, puis lance une suite de tests
 \item[clean] nettoie le dossier du projet pour ne laisser que les sources
+\end{description}
+
+Une fois le programme compilé, la commande \texttt{./minic [options] fichier.c}
+exécute les phases de la compilation sur le contenu du fichier \texttt{fichier.c}.
+Pour l'instant, les options suivantes sont disponibles :
+\begin{description}
+\item[--help] affiche la liste des options
+\item[-parse-only] s'arrête à l'analyse syntaxique
+\item[-type-only] s'arrête à l'analyse sémantique : c'est en fait le comportement
+  par défaut, car la production de code n'est pas encore au point
+\item[--version] sert à faire joli :-)
 \end{description}
 
 
@@ -70,7 +87,8 @@ Ocamllex et Menhir. Ainsi le Makefile est très simple, il ne fait que 11 lignes
 Le lexer est généré par Ocamllex à partir du fichier \texttt{lexer.mll}.
 
 L'écriture du lexer n'a pas en général posé de problème, c'était la section la plus
-simple du projet.
+simple du projet, comportant une certaine dose de répétitivité (il y a 11 mots-clé à
+gérer dans le Mini-C\ldots).
 
 Une subtilité cependant dans le fonctionnement de Ocamllex : il faut explicitement lui
 indiquer les changements de ligne en appelant la fonction \texttt{Lexing.new\_line} sur
@@ -92,13 +110,42 @@ de caractères les représentant grâce à une regex, puis de déchiffrer cette 
 une règle du lexer que l'on applique non pas à \texttt{lexbuf}, mais à un buffer créé
 à partir de la chaîne.
 
-\subsection{Analyse syntaxique}
+Dernière note : les littéraux entiers sont stockés comme des Int32, afin de pouvoir
+représenter toute la plage de valeurs disponibles pour un mot machine sur un MIPS 32 bits,
+qui sera l'architecture cible du compilateur.
+
+\subsection{Analyse syntaxique et arbre de syntaxe}
 
 Le parser est généré par Menhir à partir du fichier \texttt{parser.mly}.
 
-Grammaire à peu près copiée sur la spécification du projet.
-Utilisation des fonctionnalités de Menhir :
-% règle paramétrée with_location, usage de inline
+Les règles de grammaire ont été dans un premier temps copiées à partir de la
+spécification du projet, ce qui a permis d'obtenir rapidement (après quelques modifications)
+un squelette à compléter avec les actions produisant l'AST.
+
+Nous avons fait un usage important des fonctionnalités de Menhir afin d'améliorer la
+concision du code. Citons notamment :
+\begin{itemize}
+\item les règles \texttt{\%inline}, permettant notamment de gérer les opérateurs binaires
+  avec les bonnes priorités
+\item l'usage des règles paramétrées : par exemple, parser la liste des arguments
+  d'une fonction est facilité par la règle \texttt{separated\_list}
+\item lorsqu'il a fallu implémenter les informations de localisation dans l'arbre
+  de syntaxe, les mots-clé \texttt{\$startpos} et \texttt{\$endpos} ainsi que la
+  possibilité de définir notre propre règle paramétrée \texttt{with\_location}
+  ont permis de faire fonctionner le parser avec un minimum de modifications
+\end{itemize}
+
+L'arbre de syntaxe a été spécifié de façon délibérément proche de la syntaxe concrète,
+afin de faciliter la signalisation des erreurs lors de la phase suivante ; ainsi, les boucles
+\texttt{for} apparaissent comme le noeud \texttt{Ast.For} plutôt que d'être immédiatement
+désucrées en boucles \texttt{while}. Pour la même raison, l'AST est annoté de couples
+de \texttt{Lexing.position} indiquant l'emplacement (début et fin) de chaque syntagme
+dans le fichier.
+
+Ont été désucrés : \texttt{a->b} en \texttt{(*a).b} et \texttt{a[b]} en \texttt{*(a+b)}.
+Dans ces cas, nous avons décidé d'indiquer comme localisation des noeuds intermédiaires
+introduits l'emplacement du syntagme original entier.
+
 message d'erreur pas très explicite (``Syntax error'')
 token error --> compliqué
 Dépendance sur le bon comportement de Menhir pour la résolution de conflits...
