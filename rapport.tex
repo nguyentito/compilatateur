@@ -1,0 +1,135 @@
+\documentclass[a4paper, 11pt]{article}
+\usepackage[utf8]{inputenc} 
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[french]{babel}
+\usepackage{fullpage}
+\usepackage{listings}
+\usepackage{hyperref}
+ 
+\begin{document}
+ 
+\title{Projet de compilation}
+\author{Nguy\~{\^e}n Lê Thành D\~ung \and Nicolas Koliaza Blanchard}
+\date{Novembre 2012}
+\maketitle
+
+\section{Présentation générale}
+
+\subsection{Avancement du projet}
+
+Pour l'instant, le lexer, le parser et le typeur ont été écrits. La version
+actuelle du typeur ne génère pas d'AST décoré, elle se contente de vérifier
+la correction du typage, l'unicité des définitions globales, etc. et renvoie
+\texttt{unit}.
+
+Le programme a été testé sur l'ensemble des fichiers de tests fournis, et
+se comporte dessus comme attendu.
+
+\subsection{Compiler et exécuter}
+
+Le projet est muni d'un Makefile qui propose les cibles suivantes :
+\begin{description}
+\item[minic] la cible par défaut ; taper simplement \texttt{make} en ligne
+  de commande permet de produire l'exécutable \texttt{minic} du compilateur
+\item[tests] compile le compilateur si besoin est, puis lance une suite de tests
+\item[clean] nettoie le dossier du projet pour ne laisser que les sources
+\end{description}
+
+Une fois le programme compilé, la commande \texttt{./minic [options] fichier.c}
+exécute les phases de la compilation sur le contenu du fichier \texttt{fichier.c}.
+Pour l'instant, les options suivantes sont disponibles :
+\begin{description}
+\item[--help] affiche la liste des options
+\item[-parse-only] s'arrête à l'analyse syntaxique
+\item[-type-only] s'arrête à l'analyse sémantique : c'est en fait le comportement
+  par défaut, car la production de code n'est pas encore réalisée
+\item[--version] sert à faire joli :-)
+\end{description}
+
+\subsection{Dépôt git}
+
+Le code source est disponible sur Github à l'adresse \url{http://github.com/nguyentito/compilatateur}.
+Tous les commits ont été faits depuis la même machine, ce qui ne reflète pas le partage réel du travail. On y trouvera le brouillon d'un rapport plus complet que nous avons dû abréger.
+
+\section{Choix techniques}
+
+\subsection{Considérations globales}
+
+\subsubsection{Structure du programme}
+
+Le compilateur a été découpé en les grandes phases suivantes :
+\begin{itemize}
+\item Analyse lexicale
+\item Analyse syntaxique
+\item Typage / analyse sémantique
+\item Production de code
+\end{itemize}
+
+\subsubsection{Chaîne de compilation}
+
+On a un Makefile qui fait appel à OCamlbuild.
+
+\subsection{Analyse lexicale}
+
+L'écriture du lexer était relativement simple bien qu'un peu répétitive.
+
+Quelques remarques :
+\begin{itemize}
+\item il a fallu utiliser \texttt{Lexing.new\_line} pour avoir une gestion correcte
+  des numéros de ligne dans les localisations
+\item on avait d'abord utilisé des regex pour éliminer les blancs et les commentaires,
+  mais il a fallu utiliser des règles du lexer à la place (et c'est plus lisible)
+\item les littéraux int/char sont stockés comme des Int32
+\end{itemize}
+Nous ne résistons pas au plaisir de vous montrer la défunte regex :
+\begin{lstlisting}[language=Caml]
+let comment = "//" [^ '\n']*
+            | "/*" ([^ '*'] | ('*'* [^ '/' '*']))* '*'* "*/"
+\end{lstlisting}
+
+\subsection{Analyse syntaxique et arbre de syntaxe}
+
+Les règles de grammaire ont été dans un premier temps copiées à partir de la
+spécification du projet, ce qui a permis d'obtenir rapidement (après quelques modifications)
+un squelette à compléter avec les actions produisant l'AST.
+
+L'arbre de syntaxe est proche de la syntaxe concrète, avec un minimum de désucrage.
+Ca facilite la signalisation des erreurs pour la suite.
+
+Cependant certaines choses ne sont toujours pas satisfaisantes : 
+\begin{itemize}
+\item Le fait que les messages d'erreur (``Syntax error'') ne soient pas explicites.
+\item La dépendance sur Menhir et son côté boîte noire.
+\item La gestion des déclarations avec multi-pointeurs qui n'est pas élégante.
+\end{itemize}
+
+
+\subsection{Vérification du typage}
+
+C'est la partie lourde du code, avec près de 500 lignes, principalement pour les listes d'erreurs, même en essayant d'éviter les répétitions. 
+Deux questions subsiste :
+\begin{itemize}
+\item dans les spécifications du projet la relation de compatibilité de type n'a pas
+  à commuter avec les pointeurs ce qui semble pourtant logique. Ainsi \texttt{int*}
+  $\not\equiv$ \texttt{char*}. L'implémenation actuelle suit ces spécifications.
+\item Il y a des ambiguïtés liées au typage des expressions arithmétiques, ainsi
+  0+0 pourrait aussi bien être de type \texttt{int} que de type \texttt{void*}.
+\end{itemize}
+
+\subsection{Point d'entrée du programme}
+
+C'est dans le fichier \texttt{main.ml} que tout est centralisé, qu'on connecte
+les différents modules, et qu'on gère l'affichage des erreurs qu'ils lèvent.
+
+
+\subsection{Suite de tests}
+
+Programme OCaml utilisant le module Unix pour exécuter minic sur tous les fichiers .c
+dans le dossier tests ; affiche les résultats sur stdout.
+Tous les tests ont l'air de fonctionner.
+Prévu pour Linux.
+
+
+
+\end{document}.
