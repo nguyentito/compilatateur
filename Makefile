@@ -1,8 +1,8 @@
-minic: lexer.mll parser.mly ast.mli typing.ml main.ml
-	ocamlbuild -use-menhir main.native && cp main.native minic
+minic: src
+	ocamlbuild -I src -use-menhir src/MiniC.native && cp MiniC.native minic
 
 tests: minic
-	ocamlbuild -libs str,unix test.native && ./test.native
+	runhaskell ./scripts/test.hs
 
 .PHONY: clean
 
