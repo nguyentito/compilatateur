@@ -15,6 +15,7 @@ import Text.Printf
 
 data TestCategory = Syntax
                   | Typing
+                  | Exec
                   deriving (Eq, Show)
 
 runTest cmd path = do
@@ -43,13 +44,14 @@ runTests category isGood testCmd = do
           flag = case category of
             Syntax -> " -parse-only" -- don't forget the space!
             Typing -> " -type-only"
+            Exec   -> " -type-only" -- use as positive typing tests
 
 catName = map toLower . show
 subdir category isGood =
   catName category ++ if isGood then "/good/" else "/bad/"
 
 cleanDir category isGood = do
-  return ()
+  return () -- TODO
   -- let dir = subdir category isGood
   -- let exts Inference   = ["mle"]
   --     exts Elaboration = ["mlr"]
@@ -69,7 +71,7 @@ main = do
   category <- case args !! 0 of
     "syntax" -> pure Syntax
     "typing" -> pure Typing
-    -- "codegen" -> pure Codegen
+    "exec"   -> pure Exec
     _ -> failWithUsage
   isGood <- case args !! 1 of
     "good" -> pure True

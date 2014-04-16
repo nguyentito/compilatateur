@@ -1,3 +1,5 @@
+module SMap = Map.Make(String)
+
 module Common = struct
   type ctype = Void | Int | Char | Struct of string | Union of string
              | Pointer of ctype
@@ -65,7 +67,7 @@ module Typed = struct
 
   type lvalue = Var of string
               | Deref of expr
-              | LSubfield of lvalue * string
+              | LSubfield of ctype * lvalue * string
 
   and expr' = IntV of Int32.t | StringV of string
              | LValue of lvalue
@@ -74,22 +76,20 @@ module Typed = struct
              | Incr of incr * lvalue
              | Apply of string * expr list
              | Address of lvalue
-             | Unop of expr
+             | Unop of unop * expr
              | Binop of binop * expr * expr
              | Sizeof of ctype
-
-  and expr = expr' * ctype
+  and expr = ctype * expr'
 
   type decl_var = ctype * string
 
-  type instr' = EmptyInstr
-              | ExecExpr of expr
-              | IfThenElse of expr * instr * instr
-              | While of expr * instr 
-              | For of expr list * expr option * expr list * instr
-              | Block of block
-              | Return of expr option
-  and instr = instr' * ctype
+  type instr = EmptyInstr
+             | ExecExpr of expr
+             | IfThenElse of expr * instr * instr
+             | While of expr * instr 
+             | For of expr list * expr option * expr list * instr
+             | Block of block
+             | Return of expr option
 
   and block = { block_locals : decl_var list ;
                 block_instrs : instr list }
@@ -98,12 +98,11 @@ module Typed = struct
                     fun_return_type : ctype ;
                     fun_args : decl_var list ;
                     fun_body : block }
-(*
+
   type program = { prog_globals : decl_var list;
-                   prog_structs : decl_var list list;
-                   prog_unions  : decl_var list list;
+                   prog_structs : decl_var list SMap.t;
+                   prog_unions  : decl_var list SMap.t;
                    prog_funs : decl_fun list }
-*)
-  type program = unit
+
 end
 

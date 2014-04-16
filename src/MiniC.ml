@@ -28,6 +28,13 @@ let signal_failure filename pos_start pos_end message =
                  filename line_num start_col end_col message;
   exit 1
 
+(* for debug purposes *)
+let foobar filename = 
+  let file = open_in filename in 
+  let buf = Lexing.from_channel file in
+  let program_ast = Parser.parse_source_file Lexer.get_token buf in 
+  Typing.typecheck_program program_ast
+
 let main_exec filename =
   try
     let file = open_in filename in 
@@ -64,4 +71,4 @@ let main () =
   then Arg.usage option_list usage_msg
   else Arg.parse option_list main_exec usage_msg
 
-let _ = main ()
+(* let _ = main () *)

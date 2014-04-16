@@ -1,7 +1,3 @@
-(* Note : this does not yet produced a labeled AST,
-   it only checks the type-correctness of the source
- *)
-
 open Ast.Raw
 open TypeError
 module T = Ast.Typed
@@ -133,69 +129,63 @@ let add_var_with_err loc env err var_map (typ,var) =
 
 (** Type checking and inference for expressions **)
 
-let rec type_expr env (expr, loc) =
+let rec type_expr : typing_environment -> expr -> T.expr
+  = fun env (expr, loc) ->
   (* This can't be just partially applied because it would be restricted
      to a monomorphic function *)
   let (<??>) x err = get_option_with_exn loc x err in
   let raise_err = raise_err_with_loc loc in
 
-  let assert_lvalue e = if not (lvalue e) then raise_err InvalidLValue in
+  let lvalue_to_expr () =
+    let (t, e) = type_lvalue env (expr, loc) in
+    (t, T.LValue e)
+  in
 
   begin match expr with
-    | IntV x when x = Int32.zero -> TypeNull
+    | IntV x when x = Int32.zero -> (TypeNull, T.IntV x)
 
-    | IntV    _ -> Int
-    | StringV _ -> Pointer Char
+    | IntV    x -> (Int, T.IntV x)
+    | StringV s -> (Pointer Char, T.StringV s)
 
-    | Var x -> lookup_var x env <??> UnknownVar x
+    | Var _ | Deref _ -> lvalue_to_expr ()
 
     | Sizeof Void -> raise_err SizeofVoid
-    | Sizeof t -> assert_well_formed loc env t; Int
+    | Sizeof t -> assert_well_formed loc env t; (Int, T.Sizeof t)
 
-    | Address (e, loc_e) -> if lvalue e
-                            then Pointer (type_expr env (e, loc_e))
-                            else raise_err_with_loc loc_e InvalidLValue
-
-    (* Dereferencing the literal 0 or an int/char is not allowed
-       (gcc does the same thing)
-       Remember : no casts !
-    *)
-    | Deref e -> begin match type_expr env e with
-        | Pointer t -> t
-        | x -> raise_err (InvalidPointer x)
-    end
+    | Address e -> let (t, e') = type_lvalue env e in (t, T.Address e')
       
-    | Subfield (e,x) -> begin match type_expr env e with
-        | Struct s -> let fields = lookup_struct s env <??> UnknownStruct s in
-                      assoc_field_type x fields <??> UnknownStructField (x,s)
-        | Union s -> let fields = lookup_struct s env <??> UnknownUnion s in
-                     assoc_field_type x fields <??> UnknownUnionField (x,s)
-        | t -> raise_err (NonComposite t)
-    end
+    | Subfield (e,x) -> begin
+        try lvalue_to_expr ()
+        with Error (InvalidLValue, _) ->
+          let (t, e') = type_expr env e in
+          (type_subfield env loc t x, T.Subfield ((t, e'), x))
+      end
 
     | Assign ((l_noloc, _) as l, r) ->
-        assert_lvalue l_noloc;
-        let tl = type_expr env l and tr = type_expr env r in
+        let (tl, el) = type_lvalue env l and (tr, er) = type_expr env r in
         assert_eqv loc tl tr;
-        tl
+        (tl, T.Assign (el, (tr, er)))
           
-    | Incr (_, e) ->
-        assert_lvalue (fst e);
-        let t = type_expr env e in
-        assert_num loc t;
-        t
+    | Incr (op, (e, loc_e)) ->
+        let (t, e') = type_lvalue env (e, loc_e) in
+        assert_num loc_e t;
+        (t, T.Incr (op, e'))
       
-    | Unop (Positive, e)
-    | Unop (Negative, e) ->
-      if is_num_non_ptr (type_expr env e)
-      then Int
-      else raise_err ArithFail (* est-ce vraiment la bonne erreur ? *)
+    | Unop (Not, e) ->
+      let (t, e') = type_expr env e in
+      assert_num loc t;
+      (Int, T.Unop (Not, (t, e')))
 
-    | Unop (Not, e) -> assert_num loc (type_expr env e); Int
+    (* op \in {Positive, Negative} *)
+    | Unop (op, e) ->
+      let (t, e') = type_expr env e in
+      if is_num_non_ptr t
+      then (Int, T.Unop (op, (t, e')))
+      else raise_err ArithFail (* est-ce vraiment la bonne erreur ? *)
       
     | Binop (op, e1, e2) -> begin
-        let t1 = type_expr env e1 and t2 = type_expr env e2 in
-        match op with
+        let (t1, e1) = type_expr env e1 and (t2, e2) = type_expr env e2 in
+        let t = match op with
           | Equal | Different | Less | LessEq | Greater | GreaterEq -> begin
             assert_num loc t1; (* Perhaps define a InvalidOperand exception instead ? *)
             assert_eqv loc t1 t2;
@@ -208,6 +198,7 @@ let rec type_expr env (expr, loc) =
             end
           (* Remember to give different constructors
              to int+int and ptr+int in the eventual typed AST *)
+          (* TODO: is the above relevant? *)
           (* The following is a way to solve the non-determinism which appears
              in the formal type system rules when trying to infer the type of 0+0 *)
           | Add | Sub when t1 = TypeNull && t2 = TypeNull -> TypeNull
@@ -219,20 +210,60 @@ let rec type_expr env (expr, loc) =
           | Add | Sub (* all other cases *) -> raise_err ArithFail
           (* I'm not convinced all the above code actually does the Right Thing,
              but whatever... *)
+        in
+        (t, T.Binop (op, (t1, e1), (t2, e2)))
     end
 
   | Apply (fn, args) ->
-      let (return_type, arg_types) = lookup_function fn env <??> (UnknownFunction fn) in
-      begin
-        try
-          List.iter2 (fun t e -> assert_eqv loc t (type_expr env e))
-                     arg_types args
-        with
-          (* raised by iter2 when the lists have different lengths *)
-          | Invalid_argument _ -> raise_err (InvalidArgumentList fn)
-      end;
-      return_type
+      let (return_type, arg_types) = lookup_function fn env
+                                     <??> (UnknownFunction fn) in
+      try
+        let f t (e, loc_e) =
+          let (t', e') = type_expr env (e, loc_e) in
+          assert_eqv loc_e t t';
+          (t', e')
+        in
+        let args' =  List.map2 f arg_types args in
+        (return_type, T.Apply (fn, args'))
+      with
+      (* raised by map2 when the lists have different lengths *)
+      | Invalid_argument _ -> raise_err (InvalidArgumentList fn)
+
   end
+
+and type_lvalue : typing_environment -> expr -> ctype * T.lvalue
+  = fun env (expr, loc) ->
+    let (<??>) x err = get_option_with_exn loc x err in
+    let raise_err = raise_err_with_loc loc in
+
+    match expr with
+    | Var x -> (lookup_var x env <??> UnknownVar x, T.Var x)
+
+    (* Dereferencing the literal 0 or an int/char is not allowed
+       (gcc does the same thing)
+       Remember : no casts ! *)
+    | Deref e -> begin match type_expr env e with
+        | (Pointer t, e') -> (t, T.Deref (Pointer t, e'))
+        | (t, _)          -> raise_err (InvalidPointer t)
+      end
+
+    | Subfield (e, x) ->
+      let (t, e') = type_lvalue env e in
+      (type_subfield env loc t x, T.LSubfield (t, e', x))
+      
+    | _ -> raise_err InvalidLValue
+
+and type_subfield : typing_environment -> location -> ctype -> string -> ctype
+  = fun env loc t x ->
+    let (<??>) x err = get_option_with_exn loc x err in
+    let raise_err = raise_err_with_loc loc in
+
+    match t with
+    | Struct s -> let fields = lookup_struct s env <??> UnknownStruct s in
+      assoc_field_type x fields <??> UnknownStructField (x,s)
+    | Union s -> let fields = lookup_union s env <??> UnknownUnion s in
+      assoc_field_type x fields <??> UnknownUnionField (x,s)
+    | _ -> raise_err (NonComposite t)
 
 (** Type checking of instructions **)
 
@@ -243,58 +274,70 @@ let rec type_expr env (expr, loc) =
 (* For now, this function returns () if the instruction is well-typed,
    else it throws an exception *)
 
-let rec typecheck_instr ret_type env (instr, loc) =
-  let raise_err = raise_err_with_loc loc in
+let rec typecheck_instr : ctype -> typing_environment -> instr -> T.instr
+  = fun ret_type env (instr, loc) ->
+    let raise_err = raise_err_with_loc loc in
 
-  let assert_valid_cond e =
-    let t = type_expr env e in
-    if not (is_num t) then raise_err (NonNumericCondition t)
-  in
+    let type_valid_cond e =
+      let (t, e') = type_expr env e in
+      if is_num t then (t, e') else raise_err (NonNumericCondition t)
+    in
 
-  begin match instr with
-    | EmptyInstr -> ()
-    | ExecExpr e -> ignore (type_expr env e)
+    begin match instr with
+      | EmptyInstr -> T.EmptyInstr
+      | ExecExpr e -> T.ExecExpr (type_expr env e)
 
-    | Return None when ret_type = Void -> ()
-    | Return None                      -> raise_err InvalidReturnVoid
-    | Return (Some e) -> (* problem : do we allow return f(); with void f() ? *)
-      let t = type_expr env e in 
-        if not (ret_type === t) then raise_err (TypeMismatch (ret_type,t)) 
+      | Return None when ret_type = Void -> T.Return None
+      | Return None                      -> raise_err InvalidReturnVoid
+      | Return (Some e) -> (* problem : do we allow return f(); with void f() ? *)
+        let (t, e') = type_expr env e in 
+        if ret_type === t
+        then T.Return (Some (t, e'))
+        else raise_err (TypeMismatch (ret_type, t)) 
 
-    | IfThenElse (e, i1, i2) -> begin
-        assert_valid_cond e;
-        typecheck_instr ret_type env i1;
-        typecheck_instr ret_type env i2
+      | IfThenElse (e, i1, i2) ->
+        T.IfThenElse (type_valid_cond e,
+                      typecheck_instr ret_type env i1,
+                      typecheck_instr ret_type env i2)
+      | While (e,i) ->
+        T.While (type_valid_cond e,
+                 typecheck_instr ret_type env i)
+
+      (* Dans le nouvel AST, il faudra transformer ça en boucle while,
+         et ça ne va pas être très beau...
+         Au moins, il n'y aura pas à gérer le comportement de break/continue *)
+      (* en fait non! on garde le for! (pour l'instant) -> TODO *)
+      | For (init, cond_option, update, body) ->
+        let init' = List.map (type_expr env) init
+        (* TODO: chercher fmap *)
+        and cond_option' = begin match cond_option with
+          | Some cond -> Some (type_valid_cond cond)
+          | None      -> None
+        end
+        and update' = List.map (type_expr env) update
+        in
+        T.For (init', cond_option', update',
+               typecheck_instr ret_type env body)
+
+      | Block b -> T.Block (typecheck_block ret_type env b loc)
     end
-    | While (e,i) -> begin
-        assert_valid_cond e;
-        typecheck_instr ret_type env i
-    end
 
-    (* Dans le nouvel AST, il faudra transformer ça en boucle while,
-       et ça ne va pas être très beau...
-       Au moins, il n'y aura pas à gérer le comportement de break/continue *)
-    | For (init, cond_option, update, body) -> begin
-        List.iter (fun e -> ignore (type_expr env e)) init;
-        begin match cond_option with
-          | Some cond -> assert_valid_cond cond
-          | None -> ()
-        end;
-        List.iter (fun e -> ignore (type_expr env e)) update;
-        typecheck_instr ret_type env body
-    end 
-
-    | Block b -> begin
-        (* local declarations override global declarations *)
-        let local_vars_map = List.fold_left (add_var_with_err loc env (fun x -> NonUniqueLocal x))
-                                            SMap.empty b.block_locals in
-      let new_env = { env_vars = left_biased_merge local_vars_map env.env_vars ;
-                      env_structs = env.env_structs ;
-                      env_unions = env.env_unions ;
-                      env_functions = env.env_functions } in
-      List.iter (fun instr -> typecheck_instr ret_type new_env instr) b.block_instrs
-  end
-end
+and typecheck_block : ctype -> typing_environment -> block -> location -> T.block
+  = fun ret_type env b loc ->
+    (* local declarations override global declarations *)
+    let local_vars_map =
+      List.fold_left
+        (add_var_with_err loc env (fun x -> NonUniqueLocal x))
+        SMap.empty b.block_locals in
+    let new_env =
+      { env_vars = left_biased_merge local_vars_map env.env_vars ;
+        env_structs = env.env_structs ;
+        env_unions = env.env_unions ;
+        env_functions = env.env_functions } in
+    let instrs =
+      List.map (typecheck_instr ret_type new_env) b.block_instrs in
+    { T.block_locals = b.block_locals;
+      T.block_instrs = instrs }
 
 
 (** Type checking of entire programs **)
@@ -310,11 +353,11 @@ end
    et faire d'une pierre deux coups
  *)
 
-let typecheck_program program =
+let typecheck_program : program -> T.program = fun program ->
 
   (* the folding function which checks the soundness of
      the declaration and adds it to the environment *)
-  let f env (decl,loc) = 
+  let f (env, acc_vars, acc_funs) (decl,loc) = 
     
     (* the repetition of this line of code would be avoided
        with a dynamically scoped variable for the current location *)
@@ -345,36 +388,31 @@ let typecheck_program program =
     in
       
     match decl with
-      | DVars global_vars ->
+    | DVars global_vars ->
         let new_vars_map = List.fold_left (add_var_with_err loc env (fun x -> NonUniqueGlobal x))
                                           env.env_vars global_vars in
         (* Note : global vars and functions are in the same namespace ! *)
         List.iter (fun (_,var) -> if SMap.mem var env.env_functions
                                   then raise_err (NonUniqueGlobal var))
                   global_vars;
-        { env_vars = new_vars_map ;
-          env_structs = env.env_structs ;
-          env_unions = env.env_unions ;
-          env_functions = env.env_functions }
+        ({ env with env_vars = new_vars_map },
+         global_vars @ acc_vars, acc_funs)
+
 
       | DType (DStruct (name, fields)) ->
         if SMap.mem name env.env_structs then raise_err (NonUniqueStructId name)
         else begin
           assert_valid_fields (Struct name) fields;
-          { env_vars = env.env_vars ;
-            env_structs = SMap.add name fields env.env_structs ;
-            env_unions = env.env_unions ;
-            env_functions = env.env_functions }
+          ({ env with env_structs = SMap.add name fields env.env_structs },
+           acc_vars, acc_funs)
         end
 
       | DType (DUnion (name, fields)) ->
         if SMap.mem name env.env_unions then raise_err (NonUniqueUnionId name)
         else begin
           assert_valid_fields (Union name) fields;
-          { env_vars = env.env_vars ;
-            env_structs = env.env_structs ;
-            env_unions = SMap.add name fields env.env_unions ;
-            env_functions = env.env_functions }
+          ({ env with env_unions = SMap.add name fields env.env_unions },
+           acc_vars, acc_funs)
         end
 
       | DFun fn -> begin
@@ -388,23 +426,34 @@ let typecheck_program program =
                                      SMap.empty fn.fun_args in
         List.iter (fun (_,var) -> if SMap.mem var arg_map then raise_err (NonUniqueLocal var))
                   fn.fun_body.block_locals;
-        let function_env =  { env_vars = left_biased_merge arg_map env.env_vars ;
-                              env_structs = env.env_structs ;
-                              env_unions = env.env_unions ;
-                              env_functions = SMap.add fn.fun_name fn_proto
-                                                       env.env_functions } in
-        typecheck_instr fn.fun_return_type function_env ((Block fn.fun_body), loc);
 
-        { env_vars = env.env_vars ;
-          env_structs = env.env_structs ;
-          env_unions = env.env_unions ;
-          env_functions = SMap.add fn.fun_name fn_proto env.env_functions }
+        let env_with_fn =
+          { env with env_functions =
+                       SMap.add fn.fun_name fn_proto env.env_functions }
+        in
+        let function_env =
+          (* the body of the function is typechecked in an environment which
+            contains its binding -> support for recursion *)
+          { env_with_fn with env_vars = left_biased_merge arg_map env.env_vars }
+        in
+        let body = typecheck_block fn.fun_return_type function_env fn.fun_body loc
+        in 
+        let new_decl = { T.fun_name = fn.fun_name;
+                         T.fun_return_type = fn.fun_return_type;
+                         T.fun_args = fn.fun_args;
+                         T.fun_body = body }
+        in
+        (env_with_fn, acc_vars, new_decl::acc_funs)
       end
   in
-  let final_env = List.fold_left f initial_env program in
+  let (final_env, vars, funs) = List.fold_left f (initial_env, [], []) program in
   match lookup_function "main" final_env with
     | None -> raise NoMainFunction
-    | Some (Int, []) | Some (Int, [Int; Pointer (Pointer Char)]) -> ()
+    | Some (Int, []) | Some (Int, [Int; Pointer (Pointer Char)]) ->
+      { T.prog_globals = List.rev vars;
+        T.prog_structs = final_env.env_structs;
+        T.prog_unions  = final_env.env_unions;
+        T.prog_funs = List.rev funs }
     | _ -> raise InvalidMainFunction
 
 
