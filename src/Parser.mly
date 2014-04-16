@@ -1,7 +1,9 @@
 %{
+  module A = Ast.Raw
+
   let rec multi_pointer t = function
     | 0 -> t
-    | n -> Ast.Pointer (multi_pointer t (n-1))
+    | n -> A.Pointer (multi_pointer t (n-1))
 
   let with_dummy_loc x = (x, (Lexing.dummy_pos, Lexing.dummy_pos))
 %}
@@ -34,7 +36,7 @@
 %left LParen RParen LBracket RBracket Arrow Dot
 %nonassoc Else
 
-%start <Ast.program> parse_source_file 
+%start <Ast.Raw.program> parse_source_file 
 
 
 %%
@@ -47,9 +49,9 @@ with_location(X):
 parse_source_file: ds = decl* ; Eof { ds }
  
 decl_noloc:
-  | x = decl_vars { Ast.DVars x }
-  | x = decl_typ  { Ast.DType x }
-  | x = decl_fun  { Ast.DFun  x }
+  | x = decl_vars { A.DVars x }
+  | x = decl_typ  { A.DType x }
+  | x = decl_fun  { A.DFun  x }
 decl : d = with_location(decl_noloc) {d}
 
 decl_vars: t = typ ; vars = separated_nonempty_list(Comma, var) ; Semicolon
@@ -62,74 +64,77 @@ decl_fun: tv = typed_var
           LParen args = separated_list(Comma, typed_var) RParen
           b = block
     { let (t, name) = tv in
-      { Ast.fun_name = name ;
-        Ast.fun_return_type = t ;
-        Ast.fun_args = args ;
-        Ast.fun_body = b } }
+      { A.fun_name = name ;
+        A.fun_return_type = t ;
+        A.fun_args = args ;
+        A.fun_body = b } }
 
 (* dunno why, but without the %inline, the reduction
    type_keyword -> Struct or Union would never be applied *)
 %inline type_keyword:
-  | Struct { fun (x,y) -> Ast.DStruct (x,y) }
-  | Union  { fun (x,y) -> Ast.DUnion  (x,y) }
+  | Struct { fun (x,y) -> A.DStruct (x,y) }
+  | Union  { fun (x,y) -> A.DUnion  (x,y) }
 
 typ:
-  | Void { Ast.Void } | Int { Ast.Int } | Char { Ast.Char }
-  | Struct id = Ident { Ast.Struct id }
-  | Union  id = Ident { Ast.Union  id }
+  | Void { A.Void } | Int { A.Int } | Char { A.Char }
+  | Struct id = Ident { A.Struct id }
+  | Union  id = Ident { A.Union  id }
 
 var: stars = Star* i = Ident { (List.length stars, i) }
 
 typed_var: t=typ v=var { let (n,i) = v in (multi_pointer t n, i) } 
 
 expr_noloc:
-  | i = IntV    { Ast.IntV    i  }
-  | s = StringV { Ast.StringV s  }
-  | id = Ident  { Ast.Var     id }
+  | i = IntV    { A.IntV    i  }
+  | s = StringV { A.StringV s  }
+  | id = Ident  { A.Var     id }
 
-  | Star e = expr { Ast.Deref e }
+  | Star e = expr { A.Deref e }
   | a = expr LBracket i = expr RBracket
-        { Ast.Deref ( (Ast.Binop (Ast.Add, a, i)), ($startpos, $endpos)) }
+        { A.Deref ( (A.Binop (A.Add, a, i)), ($startpos, $endpos)) }
 
-  | s  = expr  Dot  f = Ident { Ast.Subfield (s, f) }
-  | sp = expr Arrow f = Ident { Ast.Subfield ((Ast.Deref sp, ($startpos, $endpos)), f) }
+  | s  = expr  Dot  f = Ident { A.Subfield (s, f) }
+  | sp = expr Arrow f = Ident { A.Subfield ((A.Deref sp, ($startpos, $endpos)), f) }
 
-  | l = expr Assign r = expr { Ast.Assign (l, r) }
+  | l = expr Assign r = expr { A.Assign (l, r) }
 
   | f = Ident LParen a = separated_list(Comma, expr) RParen
-        { Ast.Apply (f, a) }
+        { A.Apply (f, a) }
 
-  | Increment e = expr { Ast.PreInc  e } %prec unary
-  | Decrement e = expr { Ast.PreDec  e } %prec unary
-  | e = expr Increment { Ast.PostInc e } %prec unary
-  | e = expr Decrement { Ast.PostDec e } %prec unary
+  | Increment e = expr { A.Incr (A.PreIncr,  e) } %prec unary
+  | Decrement e = expr { A.Incr (A.PreDecr,  e) } %prec unary
+  | e = expr Increment { A.Incr (A.PostIncr, e) } %prec unary
+  | e = expr Decrement { A.Incr (A.PostDecr, e) } %prec unary
 
-  | Address e = expr { Ast.Address e  } %prec unary
-  | Not     e = expr { Ast.Not e      } %prec unary
-  | Plus    e = expr { Ast.Positive e } %prec unary (* it's actually useful for later *)
-  | Minus   e = expr { Ast.Negative e } %prec unary
+  | Address  e = expr { A.Address e   } %prec unary
+  | o = unop e = expr { A.Unop (o, e) } %prec unary
   
   | Sizeof LParen t = typ stars = Star* RParen
-        { Ast.Sizeof (multi_pointer t (List.length stars)) }
+        { A.Sizeof (multi_pointer t (List.length stars)) }
   | LParen e = expr_noloc RParen { e }
 
-  | x = expr o = op y = expr { Ast.Binop (o, x, y) }
+  | x = expr o = binop y = expr { A.Binop (o, x, y) }
 
 expr:
   | e = with_location(expr_noloc) { e }
+
+%inline unop:
+  | Not { A.Not }
+  | Plus  { A.Positive }
+  | Minus { A.Negative }
     
-%inline op:
-  | And {Ast.And} | Or {Ast.Or}
-  | Equal {Ast.Equal} | Different {Ast.Different}
-  | Less {Ast.Less}       | LessEq {Ast.LessEq}
-  | Greater {Ast.Greater} | GreaterEq {Ast.GreaterEq}
-  | Plus {Ast.Add} | Minus {Ast.Sub} | Star {Ast.Mul}
-  | Divide {Ast.Div} | Modulo {Ast.Modulo}
+%inline binop:
+  | And {A.And} | Or {A.Or}
+  | Equal {A.Equal} | Different {A.Different}
+  | Less {A.Less}       | LessEq {A.LessEq}
+  | Greater {A.Greater} | GreaterEq {A.GreaterEq}
+  | Plus {A.Add} | Minus {A.Sub} | Star {A.Mul}
+  | Divide {A.Div} | Modulo {A.Modulo}
 
 
 instruction_noloc:
-  | Semicolon { Ast.EmptyInstr }
-  | e = expr Semicolon { Ast.ExecExpr e }
+  | Semicolon { A.EmptyInstr }
+  | e = expr Semicolon { A.ExecExpr e }
 
 (* Note that with these grammar rules for if-else, the expression
      if(a) if(b) c else d
@@ -142,26 +147,28 @@ instruction_noloc:
    (http://en.wikipedia.org/wiki/Dangling_else)
 *)
   | If LParen e = expr RParen i1 = instruction
-        { Ast.IfThenElse (e, i1, with_dummy_loc Ast.EmptyInstr) }
+        { A.IfThenElse (e, i1, with_dummy_loc A.EmptyInstr) }
   | If LParen e = expr RParen i1 = instruction Else i2 = instruction
-        { Ast.IfThenElse (e, i1, i2) }
+        { A.IfThenElse (e, i1, i2) }
 
   | While LParen e = expr RParen i = instruction
-        { Ast.While (e, i) }
+        { A.While (e, i) }
   | For LParen e1 = separated_list(Comma, expr) Semicolon
                e2 = expr? Semicolon
                e3 = separated_list(Comma, expr)
         RParen i = instruction
-        { Ast.For (e1, e2, e3, i) }
+        { A.For (e1, e2, e3, i) }
 
-  | b = block { Ast.Block b }
-  | Return e = expr? Semicolon { Ast.Return e }
+  | b = block { A.Block b }
+  | Return e = expr? Semicolon { A.Return e }
  
 instruction:
   | i = with_location(instruction_noloc) {i}
     
 block:
   | LCurly vars = decl_vars* instr_list = instruction* RCurly
-       { { Ast.block_locals = List.concat vars ; Ast.block_instrs = instr_list } }
+       { { A.block_locals = List.concat vars ;
+           A.block_instrs = instr_list }
+       }
 
 %%

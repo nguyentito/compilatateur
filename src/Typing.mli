@@ -1,8 +1,6 @@
-type semantic_error
-val error_message : semantic_error -> string
-
-exception Error of semantic_error * Ast.location
+exception Error of TypeError.semantic_error * Ast.Raw.location
 exception NoMainFunction
 exception InvalidMainFunction
 
-val typecheck_program : Ast.program -> unit
+val typecheck_program : Ast.Raw.program -> Ast.Typed.program
+

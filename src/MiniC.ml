@@ -50,7 +50,7 @@ let main_exec filename =
       | Lexer.UnterminatedComment -> syntax_error "Unterminated comment"
       | Parser.Error -> syntax_error "Syntax error"
       | Typing.Error (err, (loc_start, loc_end)) ->
-          signal_failure filename loc_start loc_end (Typing.error_message err)
+          signal_failure filename loc_start loc_end (TypeError.error_message err)
       | Typing.NoMainFunction -> 
           Printf.eprintf "File \"%s\", line 1, characters 0-0 :\nno main function\n" filename
       | Typing.InvalidMainFunction ->
