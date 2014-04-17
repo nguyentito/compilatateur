@@ -396,7 +396,7 @@ let typecheck_program : program -> T.program = fun program ->
                                   then raise_err (NonUniqueGlobal var))
                   global_vars;
         ({ env with env_vars = new_vars_map },
-         global_vars @ acc_vars, acc_funs)
+         List.rev global_vars @ acc_vars, acc_funs)
 
 
       | DType (DStruct (name, fields)) ->

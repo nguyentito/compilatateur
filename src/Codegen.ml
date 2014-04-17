@@ -209,6 +209,11 @@ let rec compile_instr : stack_frame -> instr -> text
       ++ compile_instr sf else_branch
       ++ label end_label
 
+    (* | While (cond, instr) -> *)
+      
+    (* | For (init, cond, update, instr) -> *)
+
+
     | Return None -> return_text
     | Return (Some e) -> compile_expr sf e ++ return_text
 
@@ -264,7 +269,7 @@ let compile_program : Ast.Typed.program -> Mips.program
       
       data =
         seqmap (fun (t, id) -> label ("global_" ^ id)
-                               ++ nop) program.prog_globals
+                               ++ dword [0]) program.prog_globals
     }
 
 
