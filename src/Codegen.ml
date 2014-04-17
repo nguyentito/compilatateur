@@ -49,55 +49,104 @@ let seqmap : ('a -> text) -> 'a list -> text
   = fun f xs -> sequence (List.map f xs)
 
 
-type stack_frame = string list (* loool *)
+type stack_frame = { sf_args   : string list;
+                     sf_locals : string list }
 
 let find_index : 'a -> 'a list -> int
   = fun x ->
     let rec loop acc = function
     | y :: ys when y = x -> acc
     | _ :: ys -> loop (acc+1) ys
-    | [] -> failwith "find_index: element not found"
+    | [] -> raise Not_found
     in
     loop 0
 
 let get_fp_offset : string -> stack_frame -> int
   = fun id sf ->
-    4 * (2 + find_index id sf)
-    
+    try
+      4 * (1 + find_index id (List.rev sf.sf_args))
+    with Not_found ->
+      try
+        -4 * (2 + find_index id sf.sf_locals)
+      with Not_found ->
+        (* the typing phase should guarantee this does not happen *)
+        assert false
+
 
 let rec compile_expr : stack_frame -> expr -> text
   = fun sf -> function
     | (_, IntV x) -> li v0 (Int32.to_int x) (* TODO: how to load big immediates? *)
-    | (_, LValue lv) -> compile_lvalue sf lv
+    | (_, LValue lv) -> eval_lvalue sf lv
+
     | (_, Apply (fn_id, args)) ->
       seqmap (eval_and_push sf) args
       ++ jal ("global_" ^ fn_id)
       ++ add sp sp oi (4 * List.length args)
-    | _ -> failwith "not supported yet"
+
+    | (_, Assign (Var id, e)) ->
+      compile_expr sf e
+      ++ sw v0 areg (get_fp_offset id sf, fp)
+
+    | _ -> failwith "not supported yet expr"
 
 and eval_and_push : stack_frame -> expr -> text
   = fun sf -> function
     | (Int, e) -> compile_expr sf (Int, e)
                   ++ sub sp sp oi 4
                   ++ sw v0 areg (0, sp)
-    | _ -> failwith "not supported yet"
+    (* do something about typenull! *)
+    | (TypeNull, e) -> compile_expr sf (Int, e)
+                  ++ sub sp sp oi 4
+                  ++ sw v0 areg (0, sp)
+    | _ -> failwith "not supported yet push"
 
-and compile_lvalue : stack_frame -> lvalue -> text
+and eval_lvalue : stack_frame -> lvalue -> text
   = fun sf -> function
     | Var id -> lw v0 areg (get_fp_offset id sf, fp)
-    | _ -> failwith "not supported yet"
+    | _ -> failwith "not supported yet lvalue"
 
 
-let compile_instr : stack_frame -> instr -> text
+let rec compile_instr : stack_frame -> instr -> text
   = fun sf -> function
-    | ExecExpr e -> compile_expr sf e
-    | _ -> failwith "not supported yet"
+    | EmptyInstr -> nop
 
-let compile_block : stack_frame -> block -> text = fun sf b ->
-  seqmap (compile_instr sf) b.block_instrs
+    | ExecExpr e -> compile_expr sf e
+
+    | IfThenElse (cond, then_branch, EmptyInstr) ->
+      let end_label = gensym () in
+      compile_expr sf cond
+      ++ beqz v0 end_label
+      ++ compile_instr sf then_branch
+      ++ label end_label
+
+    | IfThenElse (cond, then_branch, else_branch) ->
+      let else_label = gensym () in
+      let end_label  = gensym () in
+      compile_expr sf cond
+      ++ beqz v0 else_label
+      ++ compile_instr sf then_branch
+      ++ b end_label
+      ++ label else_label
+      ++ compile_instr sf else_branch
+      ++ label end_label
+
+    | Block b -> compile_block sf b
+
+    | _ -> failwith "not supported yet instr"
+
+and compile_block : stack_frame -> block -> text = fun sf b ->
+  let locals = b.block_locals in
+  let sf = { sf with sf_locals = sf.sf_locals
+                                 @ List.map snd b.block_locals } in
+  begin
+    if locals = [] then nop
+    else sub sp sp oi (4 * List.length locals)
+  end
+  ++ seqmap (compile_instr sf) b.block_instrs
 
 let compile_function : decl_fun -> text =
-  fun f -> let sf = List.map snd f.fun_args in
+  fun f -> let sf = { sf_args = List.map snd f.fun_args;
+                      sf_locals = [] } in
     label ("global_" ^ f.fun_name)
     (* save $fp and $ra *)
     ++ sub sp sp oi 8

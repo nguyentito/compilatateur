@@ -70,15 +70,15 @@ module Typed = struct
               | LSubfield of ctype * lvalue * string
 
   and expr' = IntV of Int32.t | StringV of string
-             | LValue of lvalue
-             | Subfield of expr * string
-             | Assign of lvalue * expr
-             | Incr of incr * lvalue
-             | Apply of string * expr list
-             | Address of lvalue
-             | Unop of unop * expr
-             | Binop of binop * expr * expr
-             | Sizeof of ctype
+            | LValue of lvalue
+            | Subfield of expr * string
+            | Assign of lvalue * expr
+            | Incr of incr * lvalue
+            | Apply of string * expr list
+            | Address of lvalue
+            | Unop of unop * expr
+            | Binop of binop * expr * expr
+            | Sizeof of ctype
   and expr = ctype * expr'
 
   type decl_var = ctype * string
