@@ -47,9 +47,10 @@ let main_exec filename =
     try
       let program_ast = Parser.parse_source_file Lexer.get_token buf in 
       if not !parse_only then begin
-        Typing.typecheck_program program_ast;
+        let typed_ast = Typing.typecheck_program program_ast in
         if not !type_only then begin
-          () (* production de code à venir *)
+          let asm = Codegen.compile_program typed_ast in
+          Mips.print_in_file ~file:"a.out.s" asm
         end
       end;
     with
@@ -71,4 +72,4 @@ let main () =
   then Arg.usage option_list usage_msg
   else Arg.parse option_list main_exec usage_msg
 
-(* let _ = main () *)
+let _ = main ()
