@@ -6,7 +6,7 @@ open Mips
 (* Do not handle recursive calls to main!
    Anyway, they are forbidden by the C++ standard... *)
 
-(* No need for linking with outside: we can whoose any
+(* No need for linking with outside: we can choose any
    naming convention whatsoever for labels!
 
    global variables and functions get "global_" prefix
@@ -22,25 +22,23 @@ let gensym : unit -> string =
 (* TODO: virer ce cérémonial *)
 let putchar : Mips.text =
   label "global_putchar"
-  ++ sub sp sp oi 8
-  ++ sw ra areg (0, sp)
-  ++ sw fp areg (4, sp)
-  ++ add fp sp oi 4
 
-  ++ lw a0 areg (4, fp)
+  ++ lw a0 areg (0, sp)
   ++ li v0 11
   ++ syscall
 
   ++ move v0 a0
 
-  ++ add sp fp oi 4
-  ++ lw ra areg (-4, fp)
-  ++ lw fp areg (0, fp)
   ++ jr ra
 
 let sbrk : Mips.text =
   label "global_sbrk"
   ++ nop (* TODO *)
+
+let return_text = add sp fp oi 4
+                  ++ lw ra areg (-4, fp)
+                  ++ lw fp areg (0, fp)
+                  ++ jr ra
 
 (* no stream fusion :-( *)
 let sequence : text list -> text
@@ -61,6 +59,8 @@ let find_index : 'a -> 'a list -> int
     in
     loop 0
 
+(* TODO: shadowing should be the other way around!
+   + add globals *)
 let get_fp_offset : string -> stack_frame -> int
   = fun id sf ->
     try
@@ -86,6 +86,53 @@ let rec compile_expr : stack_frame -> expr -> text
     | (_, Assign (Var id, e)) ->
       compile_expr sf e
       ++ sw v0 areg (get_fp_offset id sf, fp)
+
+    | (__, Binop (op, e1, e2)) -> begin match op with
+        (* short-circuiting logical operators *)
+        | And | Or ->
+          let jump = match op with
+            | And -> beqz
+            | Or  -> bnez
+            | _   -> assert false
+          in
+          let end_label = gensym () in
+          compile_expr sf e1
+          ++ jump v0 end_label
+          ++ compile_expr sf e2
+          ++ label end_label
+          
+        (* comparisons *)
+        | Equal | Different | Less | LessEq  | Greater | GreaterEq ->
+          let cmp = match op with
+            | Equal     -> seq
+            | Different -> sne
+            | Less      -> slt
+            | LessEq    -> sle 
+            | Greater   -> sgt
+            | GreaterEq -> sge
+            | _         -> assert false
+          in
+          compile_expr sf e1
+          ++ push v0
+          ++ compile_expr sf e2
+          ++ pop a0
+          ++ cmp v0 a0 v0
+
+        | Add | Sub | Mul | Div | Modulo ->
+          let arith = match op with
+            | Add -> add
+            | Sub -> sub
+            | Mul -> mul
+            | Div -> div
+            | Modulo -> rem
+            | _ -> assert false
+          in
+          compile_expr sf e1
+          ++ push v0
+          ++ compile_expr sf e2
+          ++ pop a0
+          ++ arith v0 a0 oreg v0
+      end
 
     | _ -> failwith "not supported yet expr"
 
@@ -130,6 +177,9 @@ let rec compile_instr : stack_frame -> instr -> text
       ++ compile_instr sf else_branch
       ++ label end_label
 
+    | Return None -> return_text
+    | Return (Some e) -> compile_expr sf e ++ return_text
+
     | Block b -> compile_block sf b
 
     | _ -> failwith "not supported yet instr"
@@ -156,13 +206,9 @@ let compile_function : decl_fun -> text =
 
     ++ compile_block sf f.fun_body
 
-    (* return in case the function doesn't call return;
+    (* return without value in case the function doesn't call return;
        (possible is the function returns void, or if it's main() *)
-    ++ add sp fp oi 4
-    ++ lw ra areg (-4, fp)
-    ++ lw fp areg (0, fp)
-    ++ jr ra
-
+    ++ return_text
 
 let compile_program : Ast.Typed.program -> Mips.program
   = fun program ->
@@ -182,10 +228,6 @@ let compile_program : Ast.Typed.program -> Mips.program
 
         (* all functions... *)
         ++ seqmap compile_function program.prog_funs
-
-        (* ++ compile_block main_block *)
-        (* ++ li v0 10 *)
-        (* ++ syscall *)
 
         ++ putchar
         ++ sbrk;
