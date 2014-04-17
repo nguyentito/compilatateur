@@ -60,7 +60,7 @@ let sf_of_funargs args =
     (SMap.add id depth map, depth + 4) (* TODO: handle chars and structs *)
   in
   { sf_locals = fst (List.fold_left f (SMap.empty, 4) (List.rev args));
-    sf_top = 4 }
+    sf_top = -4 }
 
 let push_locals_on_sf vars sf =
   let f (map, depth) (t, id) =
@@ -211,8 +211,25 @@ let rec compile_instr : stack_frame -> instr -> text
 
     (* | While (cond, instr) -> *)
       
-    (* | For (init, cond, update, instr) -> *)
-
+    | For (init, cond_option, update, body) ->
+      seqmap (compile_expr sf) init ++ begin match cond_option with
+        | None ->
+          let start_label = gensym () in
+          label start_label
+          ++ compile_instr sf body
+          ++ seqmap (compile_expr sf) update
+          ++ b start_label
+        | Some cond ->
+          let start_label = gensym () in
+          let end_label   = gensym () in
+          b end_label
+          ++ label start_label
+          ++ compile_instr sf body
+          ++ seqmap (compile_expr sf) update
+          ++ label end_label
+          ++ compile_expr sf cond
+          ++ bnez v0 start_label
+      end
 
     | Return None -> return_text
     | Return (Some e) -> compile_expr sf e ++ return_text
