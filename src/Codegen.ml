@@ -51,45 +51,68 @@ let seqmap : ('a -> text) -> 'a list -> text
 
 type stack_frame = string list (* loool *)
 
-let rec compile_expr : expr -> text = function
-  | (_, IntV x) -> li v0 (Int32.to_int x) (* TODO: how to load big immediates? *)
-  | (_, Apply (fn_id, args)) ->
-    seqmap eval_and_push args
-    ++ jal ("global_" ^ fn_id)
-    ++ add sp sp oi (4 * List.length args)
-  | _ -> failwith "not supported yet"
+let find_index : 'a -> 'a list -> int
+  = fun x ->
+    let rec loop acc = function
+    | y :: ys when y = x -> acc
+    | _ :: ys -> loop (acc+1) ys
+    | [] -> failwith "find_index: element not found"
+    in
+    loop 0
 
-and eval_and_push : expr -> text = function
-  | (Int, e) -> compile_expr (Int, e)
-                ++ sub sp sp oi 4
-                ++ sw v0 areg (0, sp)
-  | _ -> failwith "not supported yet"
+let get_fp_offset : string -> stack_frame -> int
+  = fun id sf ->
+    4 * (2 + find_index id sf)
+    
+
+let rec compile_expr : stack_frame -> expr -> text
+  = fun sf -> function
+    | (_, IntV x) -> li v0 (Int32.to_int x) (* TODO: how to load big immediates? *)
+    | (_, LValue lv) -> compile_lvalue sf lv
+    | (_, Apply (fn_id, args)) ->
+      seqmap (eval_and_push sf) args
+      ++ jal ("global_" ^ fn_id)
+      ++ add sp sp oi (4 * List.length args)
+    | _ -> failwith "not supported yet"
+
+and eval_and_push : stack_frame -> expr -> text
+  = fun sf -> function
+    | (Int, e) -> compile_expr sf (Int, e)
+                  ++ sub sp sp oi 4
+                  ++ sw v0 areg (0, sp)
+    | _ -> failwith "not supported yet"
+
+and compile_lvalue : stack_frame -> lvalue -> text
+  = fun sf -> function
+    | Var id -> lw v0 areg (get_fp_offset id sf, fp)
+    | _ -> failwith "not supported yet"
 
 
-let compile_instr : instr -> text = fun i ->
-  match i with
-  | ExecExpr e -> compile_expr e
-  | _ -> failwith "not supported yet"
+let compile_instr : stack_frame -> instr -> text
+  = fun sf -> function
+    | ExecExpr e -> compile_expr sf e
+    | _ -> failwith "not supported yet"
 
-let compile_block : block -> text = fun b ->
-  seqmap compile_instr b.block_instrs
+let compile_block : stack_frame -> block -> text = fun sf b ->
+  seqmap (compile_instr sf) b.block_instrs
 
 let compile_function : decl_fun -> text =
-  fun f -> label ("global_" ^ f.fun_name)
-           (* save $fp and $ra *)
-           ++ sub sp sp oi 8
-           ++ sw ra areg (0, sp)
-           ++ sw fp areg (4, sp)
-           ++ add fp sp oi 4
+  fun f -> let sf = List.map snd f.fun_args in
+    label ("global_" ^ f.fun_name)
+    (* save $fp and $ra *)
+    ++ sub sp sp oi 8
+    ++ sw ra areg (0, sp)
+    ++ sw fp areg (4, sp)
+    ++ add fp sp oi 4
 
-           ++ compile_block f.fun_body
+    ++ compile_block sf f.fun_body
 
-           (* return in case the function doesn't call return;
-              (possible is the function returns void, or if it's main() *)
-           ++ add sp fp oi 4
-           ++ lw ra areg (-4, fp)
-           ++ lw fp areg (0, fp)
-           ++ jr ra
+    (* return in case the function doesn't call return;
+       (possible is the function returns void, or if it's main() *)
+    ++ add sp fp oi 4
+    ++ lw ra areg (-4, fp)
+    ++ lw fp areg (0, fp)
+    ++ jr ra
 
 
 let compile_program : Ast.Typed.program -> Mips.program
