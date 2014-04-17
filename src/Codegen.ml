@@ -1,6 +1,8 @@
 open Ast.Typed
 open Mips
 
+module SMap = Map.Make(String)
+
 (* Premier jet : on ne va gérer que des arguments de taille 4 octets *)
 
 (* Do not handle recursive calls to main!
@@ -19,16 +21,12 @@ let gensym : unit -> string =
   fun () -> let x = !r in r := x + 1;
             "local_" ^ string_of_int x
 
-(* TODO: virer ce cérémonial *)
 let putchar : Mips.text =
   label "global_putchar"
-
   ++ lw a0 areg (0, sp)
   ++ li v0 11
   ++ syscall
-
   ++ move v0 a0
-
   ++ jr ra
 
 let sbrk : Mips.text =
@@ -41,37 +39,56 @@ let return_text = add sp fp oi 4
                   ++ jr ra
 
 (* no stream fusion :-( *)
-let sequence : text list -> text
+let sequence : ([< `data | `text] as 'a) asm list -> 'a asm
   = fun xs -> List.fold_right (++) xs nop
-let seqmap : ('a -> text) -> 'a list -> text
+let seqmap : ('a -> ([< `data | `text] as 'b) asm) -> 'a list -> 'b asm
   = fun f xs -> sequence (List.map f xs)
 
 
-type stack_frame = { sf_args   : string list;
-                     sf_locals : string list }
+(** lvalues, addresses, scope **)
 
-let find_index : 'a -> 'a list -> int
-  = fun x ->
-    let rec loop acc = function
-    | y :: ys when y = x -> acc
-    | _ :: ys -> loop (acc+1) ys
-    | [] -> raise Not_found
-    in
-    loop 0
+(* *static* memory locations *)
+type memloc = Stack of int (* offset from $fp *)
+            | StaticHeap of string (* label for global var *)
+            (* TODO: pointers *)
+                      
+type stack_frame = { sf_locals : int SMap.t;
+                     sf_top : int }
 
-(* TODO: shadowing should be the other way around!
-   + add globals *)
-let get_fp_offset : string -> stack_frame -> int
-  = fun id sf ->
-    try
-      4 * (1 + find_index id (List.rev sf.sf_args))
-    with Not_found ->
-      try
-        -4 * (2 + find_index id sf.sf_locals)
-      with Not_found ->
-        (* the typing phase should guarantee this does not happen *)
-        assert false
+let sf_of_funargs args = 
+  let f (map, depth) (t, id) =
+    (SMap.add id depth map, depth + 4) (* TODO: handle chars and structs *)
+  in
+  { sf_locals = fst (List.fold_left f (SMap.empty, 4) (List.rev args));
+    sf_top = 4 }
 
+let push_locals_on_sf vars sf =
+  let f (map, depth) (t, id) =
+    let depth = depth - 4 in
+    (SMap.add id depth map, depth)
+  in
+  { sf with sf_locals = fst (List.fold_left f (sf.sf_locals, sf.sf_top) vars) }
+
+let memloc_of_lvalue : stack_frame -> lvalue -> memloc
+  = fun sf -> function
+    | Var id -> begin
+        try Stack (SMap.find id sf.sf_locals)
+        with Not_found -> StaticHeap ("global_" ^ id)
+      end
+    | _ -> raise (Invalid_argument "memloc_of_lvalue")
+
+let load_memloc : register -> memloc -> text
+  = fun reg -> function
+    | Stack offset -> lw reg areg (offset, fp)
+    | StaticHeap label -> lw reg alab label
+
+let store_memloc : register -> memloc -> text
+  = fun reg -> function
+    | Stack offset -> sw reg areg (offset, fp)
+    | StaticHeap label -> sw reg alab label
+
+
+(** recursive AST traversal **)
 
 let rec compile_expr : stack_frame -> expr -> text
   = fun sf -> function
@@ -83,9 +100,10 @@ let rec compile_expr : stack_frame -> expr -> text
       ++ jal ("global_" ^ fn_id)
       ++ add sp sp oi (4 * List.length args)
 
-    | (_, Assign (Var id, e)) ->
+    | (_, Assign (lv, e)) ->
       compile_expr sf e
-      ++ sw v0 areg (get_fp_offset id sf, fp)
+      ++ store_memloc v0 (memloc_of_lvalue sf lv)
+
 
     | (__, Binop (op, e1, e2)) -> begin match op with
         (* short-circuiting logical operators *)
@@ -102,7 +120,7 @@ let rec compile_expr : stack_frame -> expr -> text
           ++ label end_label
           
         (* comparisons *)
-        | Equal | Different | Less | LessEq  | Greater | GreaterEq ->
+        | Equal | Different | Less | LessEq | Greater | GreaterEq ->
           let cmp = match op with
             | Equal     -> seq
             | Different -> sne
@@ -134,6 +152,20 @@ let rec compile_expr : stack_frame -> expr -> text
           ++ arith v0 a0 oreg v0
       end
 
+    | (_, Incr (op, lv)) -> begin
+        let loc = memloc_of_lvalue sf lv
+        and imm = match op with
+          | PreIncr | PostIncr -> +1
+          | PreDecr | PostDecr -> -1
+        in
+        load_memloc v0 loc
+        ++ match op with
+        | PreIncr  | PreDecr  -> add v0 v0 oi imm
+                                 ++ store_memloc v0 loc
+        | PostIncr | PostDecr -> add a0 v0 oi imm
+                                 ++ store_memloc a0 loc
+      end
+
     | _ -> failwith "not supported yet expr"
 
 and eval_and_push : stack_frame -> expr -> text
@@ -149,7 +181,7 @@ and eval_and_push : stack_frame -> expr -> text
 
 and eval_lvalue : stack_frame -> lvalue -> text
   = fun sf -> function
-    | Var id -> lw v0 areg (get_fp_offset id sf, fp)
+    | (Var _) as x -> load_memloc v0 (memloc_of_lvalue sf x)
     | _ -> failwith "not supported yet lvalue"
 
 
@@ -186,8 +218,7 @@ let rec compile_instr : stack_frame -> instr -> text
 
 and compile_block : stack_frame -> block -> text = fun sf b ->
   let locals = b.block_locals in
-  let sf = { sf with sf_locals = sf.sf_locals
-                                 @ List.map snd b.block_locals } in
+  let sf = push_locals_on_sf locals sf in
   begin
     if locals = [] then nop
     else sub sp sp oi (4 * List.length locals)
@@ -195,8 +226,7 @@ and compile_block : stack_frame -> block -> text = fun sf b ->
   ++ seqmap (compile_instr sf) b.block_instrs
 
 let compile_function : decl_fun -> text =
-  fun f -> let sf = { sf_args = List.map snd f.fun_args;
-                      sf_locals = [] } in
+  fun f -> 
     label ("global_" ^ f.fun_name)
     (* save $fp and $ra *)
     ++ sub sp sp oi 8
@@ -204,7 +234,7 @@ let compile_function : decl_fun -> text =
     ++ sw fp areg (4, sp)
     ++ add fp sp oi 4
 
-    ++ compile_block sf f.fun_body
+    ++ compile_block (sf_of_funargs f.fun_args) f.fun_body
 
     (* return without value in case the function doesn't call return;
        (possible is the function returns void, or if it's main() *)
@@ -233,7 +263,8 @@ let compile_program : Ast.Typed.program -> Mips.program
         ++ sbrk;
       
       data =
-        nop
+        seqmap (fun (t, id) -> label ("global_" ^ id)
+                               ++ nop) program.prog_globals
     }
 
 
