@@ -209,7 +209,15 @@ let rec compile_instr : stack_frame -> instr -> text
       ++ compile_instr sf else_branch
       ++ label end_label
 
-    (* | While (cond, instr) -> *)
+    | While (cond, instr) ->
+      let start_label = gensym () in
+      let end_label   = gensym () in
+      b end_label
+      ++ label start_label
+      ++ compile_instr sf instr
+      ++ label end_label
+      ++ compile_expr sf cond
+      ++ bnez v0 start_label
       
     | For (init, cond_option, update, body) ->
       seqmap (compile_expr sf) init ++ begin match cond_option with
@@ -235,8 +243,6 @@ let rec compile_instr : stack_frame -> instr -> text
     | Return (Some e) -> compile_expr sf e ++ return_text
 
     | Block b -> compile_block sf b
-
-    | _ -> failwith "not supported yet instr"
 
 and compile_block : stack_frame -> block -> text = fun sf b ->
   let locals = b.block_locals in
