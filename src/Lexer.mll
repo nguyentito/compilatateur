@@ -55,7 +55,7 @@ rule get_token = parse
   | "0x"  (digit_hex+ as s) { read_base 16 Int32.zero (Lexing.from_string s) }
   | ('0' digit_oct*)   as s { read_base 8  Int32.zero (Lexing.from_string s) }
   | (['1'-'9'] digit*) as s { read_base 10 Int32.zero (Lexing.from_string s) }
-  | "'" character "'" as s { read_character s }
+  | "'" (character as s) "'" { read_character s }
 
   (* Delimiters *)
   | '(' {LParen}  | ')' {RParen}
