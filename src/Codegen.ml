@@ -3,11 +3,6 @@ open Mips
 
 module SMap = Map.Make(String)
 
-(* Premier jet : on ne va gérer que des arguments de taille 4 octets *)
-
-(* Do not handle recursive calls to main!
-   Anyway, they are forbidden by the C++ standard... *)
-
 (* No need for linking with outside: we can choose any
    naming convention whatsoever for labels!
 
@@ -42,15 +37,28 @@ let return_text = add sp fp oi 4
                   ++ jr ra
 
 let sizeof = function
-  | Int -> 4
-  | Char -> 1
-  | Pointer _ -> 4
+  | Void | TypeNull -> assert false
+  | Int | Pointer _ -> 4
+  | Char            -> 1
+  | Struct _ | Union _ -> failwith "not implemented  yet"
 
 (* no stream fusion :-( *)
 let sequence : ([< `data | `text] as 'a) asm list -> 'a asm
   = fun xs -> List.fold_right (++) xs nop
 let seqmap : ('a -> ([< `data | `text] as 'b) asm) -> 'a list -> 'b asm
   = fun f xs -> sequence (List.map f xs)
+
+(* global vars! *)
+let register_string, data_segment_string =
+  let ctr = ref (-1) and dss = ref nop in
+  (fun s ->
+     incr ctr;
+     let l = "string_" ^ string_of_int !ctr in
+     dss := !dss ++ label l ++ asciiz s;
+     l
+  ),
+  (fun () -> !dss)
+
 
 
 (* See old git snapshots for the memloc type... *)
@@ -76,33 +84,41 @@ let push_locals_on_sf vars sf =
   in
   { sf with sf_locals = fst (List.fold_left f (sf.sf_locals, sf.sf_top) vars) }
 
-let load_loc : register -> text
-  = fun r -> lw r areg (0, v0)
+let load_loc : register -> ctype -> text
+  = fun r -> function
+    | Void | TypeNull -> assert false
+    | Int | Pointer _ -> lw r areg (0, v0)
+    | Char            -> lbu r areg (0, v0) (* TODO: s/lbu/lb ??? *)
 
-let store_loc : register -> text
-  = fun r -> sw r areg (0, v0)
+let store_loc : register -> ctype -> text
+  = fun r -> function
+    | Void | TypeNull -> assert false
+    | Int | Pointer _ -> sw r areg (0, v0)
+    | Char            -> sb r areg (0, v0)
+
 
 (** recursive AST traversal **)
 
 let rec compile_expr : stack_frame -> expr -> text
   = fun sf -> function
     | (_, IntV x) -> li32 v0 x
-    | (_, StringV s) -> assert false (* TODO *)
+    | (_, StringV s) -> la v0 alab (register_string s)
       
-    | (_, LValue lv) -> eval_lvalue_loc sf lv
-                        ++ load_loc v0
+    | (t, LValue lv) -> eval_lvalue_loc sf lv
+                        ++ load_loc v0 t
 
     | (_, Apply (fn_id, args)) ->
       seqmap (eval_and_push sf) args
       ++ jal ("global_" ^ fn_id)
       ++ add sp sp oi (4 * List.length args)
 
-    | (_, Assign (lv, e)) ->
+    | (t, Assign (lv, e)) ->
       compile_expr sf e
       ++ push v0
       ++ eval_lvalue_loc sf lv
       ++ pop a0
-      ++ store_loc a0
+      ++ store_loc a0 t
+      ++ move v0 a0
 
     | (_, Unop (op, e)) -> compile_expr sf e
                            ++ begin match op with
@@ -180,12 +196,12 @@ let rec compile_expr : stack_frame -> expr -> text
         | PreDecr | PostDecr -> -factor
       in
       eval_lvalue_loc sf lv
-      ++ load_loc a0
+      ++ load_loc a0 t
       ++ begin match op with
         | PreIncr  | PreDecr  -> add a0 a0 oi imm
-                                 ++ store_loc a0
+                                 ++ store_loc a0 t
         | PostIncr | PostDecr -> add a1 a0 oi imm
-                                 ++ store_loc a1
+                                 ++ store_loc a1 t
       end
       ++ move v0 a0
                                    
@@ -196,15 +212,19 @@ let rec compile_expr : stack_frame -> expr -> text
 
     | (_, Address lv) -> eval_lvalue_loc sf lv
 
-    | (_, Sizeof ctype) -> li v0 4
+    | (_, Sizeof ctype) -> li v0 (sizeof ctype)
 
 and eval_and_push : stack_frame -> expr -> text
   = fun sf -> function
-    | (Int, e) -> compile_expr sf (Int, e)
-                  ++ sub sp sp oi 4
-                  ++ sw v0 areg (0, sp)
+    | ((Int|Pointer _), e) -> compile_expr sf (Int, e)
+                              ++ sub sp sp oi 4
+                              ++ sw v0 areg (0, sp)
     (* do something about typenull! *)
     | (TypeNull, e) -> compile_expr sf (Int, e)
+                  ++ sub sp sp oi 4
+                  ++ sw v0 areg (0, sp)
+    (* TODO: this is wrong! *)
+    | (Char, e) -> compile_expr sf (Int, e)
                   ++ sub sp sp oi 4
                   ++ sw v0 areg (0, sp)
     | _ -> failwith "not supported yet push"
@@ -308,6 +328,11 @@ let compile_function : decl_fun -> text =
 
 let compile_program : Ast.Typed.program -> Mips.program
   = fun program ->
+
+    (* execute this before constructing the record
+       b/c of side effects *)
+    let functions = seqmap compile_function program.prog_funs in
+
     { text =
         (* entry point of the program
            pass argc and argv to main() (whose label is global_main) *)
@@ -323,7 +348,7 @@ let compile_program : Ast.Typed.program -> Mips.program
         ++ syscall
 
         (* all functions... *)
-        ++ seqmap compile_function program.prog_funs
+        ++ functions
 
         ++ putchar
         ++ sbrk;
@@ -331,6 +356,7 @@ let compile_program : Ast.Typed.program -> Mips.program
       data =
         seqmap (fun (t, id) -> label ("global_" ^ id)
                                ++ dword [0]) program.prog_globals
+        ++ data_segment_string ()
     }
 
 
