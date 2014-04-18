@@ -36,13 +36,6 @@ let return_text = add sp fp oi 4
                   ++ lw fp areg (0, fp)
                   ++ jr ra
 
-let sizeof = function
-  (* TODO: factor this pattern *)
-  | Void | TypeNull -> assert false
-  | Int | Pointer _ -> 4
-  | Char            -> 1
-  | Aggregate _ -> failwith "not implemented  yet"
-
 (* no stream fusion :-( *)
 let sequence : ([< `data | `text] as 'a) asm list -> 'a asm
   = fun xs -> List.fold_right (++) xs nop
@@ -64,10 +57,62 @@ let register_string, data_segment_string =
 
 let fun_protos : ctype list SMap.t ref = ref SMap.empty
 
-(* NEXT: aggregates! *)
+type aggregate_desc = { ad_size    : int;
+                        ad_aligned : bool;
+                        ad_fields  : (int * ctype) SMap.t }
+
+let aggregate_descs : (aggregate * string, aggregate_desc) Hashtbl.t
+  = Hashtbl.create 42
+
 
 (***********************)
 
+let next_multiple x y = ((x + y - 1) / y) * y
+
+(* Type which reflects the mapping of types to word sizes *)
+type mtype = MWord | MByte | MAgg of aggregate * string
+
+let mtype_of : ctype -> mtype = function
+  | Void | TypeNull  -> assert false
+  | Int | Pointer _  -> MWord
+  | Char             -> MByte
+  | Aggregate (k, s) -> MAgg (k, s)
+
+let sizeof : mtype -> int = function
+  | MWord -> 4
+  | MByte -> 1
+  | MAgg (k, s) -> (Hashtbl.find aggregate_descs (k, s)).ad_size
+
+let is_aligned : mtype -> bool = function
+  | MWord -> true
+  | MByte -> false
+  | MAgg (k, s) -> (Hashtbl.find aggregate_descs (k, s)).ad_aligned
+
+let desc_of_aggregate : aggregate -> decl_var list -> aggregate_desc
+  = fun k fields -> 
+    let any_aligned_field =
+      List.exists (fun (t, _) -> is_aligned (mtype_of t)) fields
+    in
+    match k with
+    | Union -> { ad_size    = List.fold_left max 0
+                     (List.map (fun (t, _) -> sizeof (mtype_of t)) fields);
+                 ad_aligned = any_aligned_field;
+                 ad_fields  =
+                   List.fold_left
+                     (fun acc (t, x) -> SMap.add x (0, t) acc)
+                     SMap.empty
+                     fields
+               }
+    | Struct ->
+      let f (height, map) (t, x) =
+        let mtype = mtype_of t in
+        let slot = if is_aligned mtype then next_multiple height 4 else height in
+        (slot + sizeof mtype, SMap.add x (slot, t) map)
+      in
+      let (height, map) = List.fold_left f (0, SMap.empty) fields in
+      { ad_size    = height;
+        ad_aligned = any_aligned_field;
+        ad_fields  = map }
 
 (* See old git snapshots for the memloc type... *)
 (* was used to provide a less inefficient support for
@@ -93,17 +138,14 @@ let push_locals_on_sf vars sf =
   { sf with sf_locals = fst (List.fold_left f (sf.sf_locals, sf.sf_top) vars) }
 
 let load_loc : register -> ctype -> text
-  = fun r -> function
-    | Void | TypeNull -> assert false
-    | Int | Pointer _ -> lw r areg (0, v0)
-    | Char            -> lbu r areg (0, v0) (* TODO: s/lbu/lb ??? *)
+  = fun r t -> match mtype_of t with
+    | MWord -> lw  r areg (0, v0)
+    | MByte -> lbu r areg (0, v0)
 
 let store_loc : register -> ctype -> text
-  = fun r -> function
-    | Void | TypeNull -> assert false
-    | Int | Pointer _ -> sw r areg (0, v0)
-    | Char            -> sb r areg (0, v0)
-
+  = fun r t -> match mtype_of t with
+    | MWord -> sw r areg (0, v0)
+    | MByte -> sb r areg (0, v0)
 
 
 (*** Recursive AST traversal ***)
@@ -184,12 +226,12 @@ let rec compile_expr : stack_frame -> expr -> text
             match op, t1, t2 with
             | Sub, Pointer t1', Pointer t2' ->
               sub v0 a0 oreg v0
-              ++ div v0 v0 oi (sizeof t1')
+              ++ div v0 v0 oi (sizeof (mtype_of t1'))
             | (Add | Sub), Pointer t1', _ ->
-              mul v0 v0 oi (sizeof t1')
+              mul v0 v0 oi (sizeof (mtype_of t1'))
               ++ arith v0 a0 oreg v0
             | Add, _, Pointer t2' ->
-              mul a0 a0 oi (sizeof t2')
+              mul a0 a0 oi (sizeof (mtype_of t2'))
               ++ arith v0 a0 oreg v0
             | _ -> arith v0 a0 oreg v0
           end
@@ -197,7 +239,7 @@ let rec compile_expr : stack_frame -> expr -> text
 
     | (t, Incr (op, lv)) -> 
       let factor = match t with
-        | Pointer t' -> sizeof t'
+        | Pointer t' -> sizeof (mtype_of t')
         | _          -> 1
       in
       let imm = match op with
@@ -221,18 +263,17 @@ let rec compile_expr : stack_frame -> expr -> text
 
     | (_, Address lv) -> eval_lvalue_loc sf lv
 
-    | (_, Sizeof ctype) -> li v0 (sizeof ctype)
+    | (_, Sizeof ctype) -> li v0 (sizeof (mtype_of ctype))
 
 and eval_and_push_args : stack_frame -> string -> expr list -> text
   = fun sf fn_id args -> 
     let f arg_type arg =
       compile_expr sf arg
-      ++ match arg_type with
-      | TypeNull | Void -> assert false
-      | Int | Pointer _ -> sub sp sp oi 4
-                           ++ sw v0 areg (0, sp)
-      | Char -> sub sp sp oi 4 (* quelle flemme... TODO: s/4/1/ *)
-                ++ sb v0 areg (0, sp)
+      ++ match mtype_of arg_type with
+      | MWord -> sub sp sp oi 4
+                 ++ sw v0 areg (0, sp)
+      | MByte -> sub sp sp oi 4 (* quelle flemme... TODO: s/4/1/ *)
+                 ++ sb v0 areg (0, sp)
       | _ -> failwith "not supported yet push"
     in
     let proto = SMap.find fn_id !fun_protos in
@@ -337,6 +378,11 @@ let compile_function : decl_fun -> text =
 
 let compile_program : Ast.Typed.program -> Mips.program
   = fun program ->
+
+    List.iter
+      (fun ((k, s), fields) ->
+        Hashtbl.add aggregate_descs (k, s) (desc_of_aggregate k fields))
+      program.prog_aggregates;
 
     (* execute this before constructing the record
        b/c of side effects *)
