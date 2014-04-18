@@ -37,6 +37,7 @@ let return_text = add sp fp oi 4
                   ++ jr ra
 
 let sizeof = function
+  (* TODO: factor this pattern *)
   | Void | TypeNull -> assert false
   | Int | Pointer _ -> 4
   | Char            -> 1
@@ -48,7 +49,9 @@ let sequence : ([< `data | `text] as 'a) asm list -> 'a asm
 let seqmap : ('a -> ([< `data | `text] as 'b) asm) -> 'a list -> 'b asm
   = fun f xs -> sequence (List.map f xs)
 
-(* global vars! *)
+
+(***** Global vars! *****)
+
 let register_string, data_segment_string =
   let ctr = ref (-1) and dss = ref nop in
   (fun s ->
@@ -59,6 +62,7 @@ let register_string, data_segment_string =
   ),
   (fun () -> !dss)
 
+let fun_protos : ctype list SMap.t ref = ref SMap.empty
 
 
 (* See old git snapshots for the memloc type... *)
@@ -108,7 +112,7 @@ let rec compile_expr : stack_frame -> expr -> text
                         ++ load_loc v0 t
 
     | (_, Apply (fn_id, args)) ->
-      seqmap (eval_and_push sf) args
+      eval_and_push_args sf fn_id args
       ++ jal ("global_" ^ fn_id)
       ++ add sp sp oi (4 * List.length args)
 
@@ -214,20 +218,20 @@ let rec compile_expr : stack_frame -> expr -> text
 
     | (_, Sizeof ctype) -> li v0 (sizeof ctype)
 
-and eval_and_push : stack_frame -> expr -> text
-  = fun sf -> function
-    | ((Int|Pointer _), e) -> compile_expr sf (Int, e)
-                              ++ sub sp sp oi 4
-                              ++ sw v0 areg (0, sp)
-    (* TODO: do something about typenull! *)
-    (* | (TypeNull, e) -> compile_expr sf (Int, e) *)
-    (*                    ++ sub sp sp oi 4 *)
-    (*                    ++ sw v0 areg (0, sp) *)
-    (* TODO: take 1 byte instead of 4 on the stack *)
-    | (Char, e) -> compile_expr sf (Char, e)
-                  ++ sub sp sp oi 4
-                  ++ sw v0 areg (0, sp)
-    | _ -> failwith "not supported yet push"
+and eval_and_push_args : stack_frame -> string -> expr list -> text
+  = fun sf fn_id args -> 
+    let f arg_type arg =
+      compile_expr sf arg
+      ++ match arg_type with
+      | TypeNull | Void -> assert false
+      | Int | Pointer _ -> sub sp sp oi 4
+                           ++ sw v0 areg (0, sp)
+      | Char -> sub sp sp oi 4 (* quelle flemme... TODO: s/4/1/ *)
+                ++ sb v0 areg (0, sp)
+      | _ -> failwith "not supported yet push"
+    in
+    let proto = SMap.find fn_id !fun_protos in
+    sequence (List.map2 f proto args)
 
 and eval_lvalue_loc : stack_frame -> lvalue -> text
   = fun sf -> function
@@ -331,6 +335,11 @@ let compile_program : Ast.Typed.program -> Mips.program
 
     (* execute this before constructing the record
        b/c of side effects *)
+    fun_protos := SMap.add "putchar" [Int] !fun_protos;
+    fun_protos := SMap.add "sbrk"    [Int] !fun_protos;
+    List.iter
+      (fun f -> fun_protos := SMap.add f.fun_name (List.map fst f.fun_args) !fun_protos)
+      program.prog_funs;
     let functions = seqmap compile_function program.prog_funs in
 
     { text =
