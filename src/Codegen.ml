@@ -92,7 +92,9 @@ let store_memloc : register -> memloc -> text
 
 let rec compile_expr : stack_frame -> expr -> text
   = fun sf -> function
-    | (_, IntV x) -> li v0 (Int32.to_int x) (* TODO: how to load big immediates? *)
+    | (_, IntV x) -> li32 v0 x
+    | (_, StringV s) -> assert false (* TODO *)
+      
     | (_, LValue lv) -> eval_lvalue sf lv
 
     | (_, Apply (fn_id, args)) ->
@@ -104,6 +106,13 @@ let rec compile_expr : stack_frame -> expr -> text
       compile_expr sf e
       ++ store_memloc v0 (memloc_of_lvalue sf lv)
 
+
+    | (_, Unop (op, e)) -> compile_expr sf e
+                           ++ begin match op with
+                             | Positive -> nop
+                             | Negative -> neg v0 v0
+                             | Not -> seq v0 v0 zero
+                           end
 
     | (__, Binop (op, e1, e2)) -> begin match op with
         (* short-circuiting logical operators *)
@@ -166,7 +175,13 @@ let rec compile_expr : stack_frame -> expr -> text
                                  ++ store_memloc a0 loc
       end
 
-    | _ -> failwith "not supported yet expr"
+    (* don't handle upwards struct-args for now *)
+    (* variable.field is LValue (LSubfield ...) *)
+    | (_, Subfield _) -> assert false
+
+    | (_, Address _) -> assert false
+
+    | (_, Sizeof ctype) -> assert false
 
 and eval_and_push : stack_frame -> expr -> text
   = fun sf -> function
