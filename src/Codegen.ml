@@ -31,12 +31,20 @@ let putchar : Mips.text =
 
 let sbrk : Mips.text =
   label "global_sbrk"
-  ++ nop (* TODO *)
+  ++ lw a0 areg (0, sp)
+  ++ li v0 9
+  ++ syscall
+  ++ jr ra
 
 let return_text = add sp fp oi 4
                   ++ lw ra areg (-4, fp)
                   ++ lw fp areg (0, fp)
                   ++ jr ra
+
+let sizeof = function
+  | Int -> 4
+  | Char -> 1
+  | Pointer _ -> 4
 
 (* no stream fusion :-( *)
 let sequence : ([< `data | `text] as 'a) asm list -> 'a asm
@@ -45,13 +53,12 @@ let seqmap : ('a -> ([< `data | `text] as 'b) asm) -> 'a list -> 'b asm
   = fun f xs -> sequence (List.map f xs)
 
 
-(** lvalues, addresses, scope **)
+(* See old git snapshots for the memloc type... *)
+(* was used to provide a less inefficient support for
+   reading/writing statically known locations *)
+(* TODO: make the performance of incrementing
+   a local variable less terrible *)
 
-(* *static* memory locations *)
-type memloc = Stack of int (* offset from $fp *)
-            | StaticHeap of string (* label for global var *)
-            (* TODO: pointers *)
-                      
 type stack_frame = { sf_locals : int SMap.t;
                      sf_top : int }
 
@@ -69,24 +76,11 @@ let push_locals_on_sf vars sf =
   in
   { sf with sf_locals = fst (List.fold_left f (sf.sf_locals, sf.sf_top) vars) }
 
-let memloc_of_lvalue : stack_frame -> lvalue -> memloc
-  = fun sf -> function
-    | Var id -> begin
-        try Stack (SMap.find id sf.sf_locals)
-        with Not_found -> StaticHeap ("global_" ^ id)
-      end
-    | _ -> raise (Invalid_argument "memloc_of_lvalue")
+let load_loc : register -> text
+  = fun r -> lw r areg (0, v0)
 
-let load_memloc : register -> memloc -> text
-  = fun reg -> function
-    | Stack offset -> lw reg areg (offset, fp)
-    | StaticHeap label -> lw reg alab label
-
-let store_memloc : register -> memloc -> text
-  = fun reg -> function
-    | Stack offset -> sw reg areg (offset, fp)
-    | StaticHeap label -> sw reg alab label
-
+let store_loc : register -> text
+  = fun r -> sw r areg (0, v0)
 
 (** recursive AST traversal **)
 
@@ -95,7 +89,8 @@ let rec compile_expr : stack_frame -> expr -> text
     | (_, IntV x) -> li32 v0 x
     | (_, StringV s) -> assert false (* TODO *)
       
-    | (_, LValue lv) -> eval_lvalue sf lv
+    | (_, LValue lv) -> eval_lvalue_loc sf lv
+                        ++ load_loc v0
 
     | (_, Apply (fn_id, args)) ->
       seqmap (eval_and_push sf) args
@@ -104,8 +99,10 @@ let rec compile_expr : stack_frame -> expr -> text
 
     | (_, Assign (lv, e)) ->
       compile_expr sf e
-      ++ store_memloc v0 (memloc_of_lvalue sf lv)
-
+      ++ push v0
+      ++ eval_lvalue_loc sf lv
+      ++ pop a0
+      ++ store_loc a0
 
     | (_, Unop (op, e)) -> compile_expr sf e
                            ++ begin match op with
@@ -114,7 +111,7 @@ let rec compile_expr : stack_frame -> expr -> text
                              | Not -> seq v0 v0 zero
                            end
 
-    | (__, Binop (op, e1, e2)) -> begin match op with
+    | (__, Binop (op, ((t1, _) as e1), ((t2, _) as e2))) -> begin match op with
         (* short-circuiting logical operators *)
         | And | Or ->
           let jump = match op with
@@ -158,30 +155,48 @@ let rec compile_expr : stack_frame -> expr -> text
           ++ push v0
           ++ compile_expr sf e2
           ++ pop a0
-          ++ arith v0 a0 oreg v0
+          ++ begin
+            match op, t1, t2 with
+            | Sub, Pointer t1', Pointer t2' ->
+              sub v0 a0 oreg v0
+              ++ div v0 v0 oi (sizeof t1')
+            | (Add | Sub), Pointer t1', _ ->
+              mul v0 v0 oi (sizeof t1')
+              ++ arith v0 a0 oreg v0
+            | Add, _, Pointer t2' ->
+              mul a0 a0 oi (sizeof t2')
+              ++ arith v0 a0 oreg v0
+            | _ -> arith v0 a0 oreg v0
+          end
       end
 
-    | (_, Incr (op, lv)) -> begin
-        let loc = memloc_of_lvalue sf lv
-        and imm = match op with
-          | PreIncr | PostIncr -> +1
-          | PreDecr | PostDecr -> -1
-        in
-        load_memloc v0 loc
-        ++ match op with
-        | PreIncr  | PreDecr  -> add v0 v0 oi imm
-                                 ++ store_memloc v0 loc
-        | PostIncr | PostDecr -> add a0 v0 oi imm
-                                 ++ store_memloc a0 loc
+    | (t, Incr (op, lv)) -> 
+      let factor = match t with
+        | Pointer t' -> sizeof t'
+        | _          -> 1
+      in
+      let imm = match op with
+        | PreIncr | PostIncr -> +factor
+        | PreDecr | PostDecr -> -factor
+      in
+      eval_lvalue_loc sf lv
+      ++ load_loc a0
+      ++ begin match op with
+        | PreIncr  | PreDecr  -> add a0 a0 oi imm
+                                 ++ store_loc a0
+        | PostIncr | PostDecr -> add a1 a0 oi imm
+                                 ++ store_loc a1
       end
+      ++ move v0 a0
+                                   
 
     (* don't handle upwards struct-args for now *)
     (* variable.field is LValue (LSubfield ...) *)
     | (_, Subfield _) -> assert false
 
-    | (_, Address _) -> assert false
+    | (_, Address lv) -> eval_lvalue_loc sf lv
 
-    | (_, Sizeof ctype) -> assert false
+    | (_, Sizeof ctype) -> li v0 4
 
 and eval_and_push : stack_frame -> expr -> text
   = fun sf -> function
@@ -194,10 +209,18 @@ and eval_and_push : stack_frame -> expr -> text
                   ++ sw v0 areg (0, sp)
     | _ -> failwith "not supported yet push"
 
-and eval_lvalue : stack_frame -> lvalue -> text
+and eval_lvalue_loc : stack_frame -> lvalue -> text
   = fun sf -> function
-    | (Var _) as x -> load_memloc v0 (memloc_of_lvalue sf x)
-    | _ -> failwith "not supported yet lvalue"
+    | Var id -> begin
+        try
+          let offset = SMap.find id sf.sf_locals in
+          la v0 areg (offset, fp)
+        with Not_found -> 
+          la v0 alab ("global_" ^ id)
+      end
+    | Deref e -> compile_expr sf e
+    | LSubfield _ -> failwith "not implemented yet subfield"
+
 
 
 let rec compile_instr : stack_frame -> instr -> text
