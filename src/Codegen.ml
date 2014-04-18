@@ -219,12 +219,12 @@ and eval_and_push : stack_frame -> expr -> text
     | ((Int|Pointer _), e) -> compile_expr sf (Int, e)
                               ++ sub sp sp oi 4
                               ++ sw v0 areg (0, sp)
-    (* do something about typenull! *)
-    | (TypeNull, e) -> compile_expr sf (Int, e)
-                  ++ sub sp sp oi 4
-                  ++ sw v0 areg (0, sp)
-    (* TODO: this is wrong! *)
-    | (Char, e) -> compile_expr sf (Int, e)
+    (* TODO: do something about typenull! *)
+    (* | (TypeNull, e) -> compile_expr sf (Int, e) *)
+    (*                    ++ sub sp sp oi 4 *)
+    (*                    ++ sw v0 areg (0, sp) *)
+    (* TODO: take 1 byte instead of 4 on the stack *)
+    | (Char, e) -> compile_expr sf (Char, e)
                   ++ sub sp sp oi 4
                   ++ sw v0 areg (0, sp)
     | _ -> failwith "not supported yet push"
