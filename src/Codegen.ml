@@ -54,7 +54,7 @@ let register_string, data_segment_string =
   (fun s ->
      incr ctr;
      let l = "string_" ^ string_of_int !ctr in
-     dss := !dss ++ label l ++ asciiz s;
+     dss := !dss ++ label l ++ byte s;
      l
   ),
   (fun () -> !dss)

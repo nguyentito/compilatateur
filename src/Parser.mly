@@ -21,7 +21,7 @@
 %token Arrow Dot Address
 %token LParen RParen LBracket RBracket LCurly RCurly
 %token <Int32.t> IntV
-%token <string> StringV
+%token <int list> StringV
 %token <string> Ident
 
 %right Assign

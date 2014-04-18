@@ -224,6 +224,9 @@ val asciiz : string -> data
 val dword : int list -> data
 (** place une liste de mots mémoires dans la zone data *)
 
+val byte : int list -> data
+(** place une liste d'octets dans la zone data *)
+
 val address : label list -> data
 (** place une liste d'adresses (dénotées par des labels) dans la zone
     data *)

@@ -2,6 +2,8 @@
 
    2008 Jean-Christophe Filliâtre (CNRS)
    2013 Kim Nguyen (Université Paris Sud)
+
+   légèrement altéré
 *)
 
 open Format
@@ -116,6 +118,7 @@ let comment s = S ("#" ^ s ^ "\n")
 let align n = ins ".align %i" n
 let asciiz s = ins ".asciiz %S" s
 let dword l = ins ".word %a" pr_ilist l
+let byte l = ins ".byte %a" pr_ilist l
 let address l = ins ".word %a" pr_alist l
 let (++) x y = Cat (x, y)
 

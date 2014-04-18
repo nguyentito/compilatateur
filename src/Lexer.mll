@@ -2,6 +2,7 @@
   open Parser
 
   exception UnterminatedComment
+  exception UnterminatedString
 
   let digit_of_char c =
     if '0' <= c && c <= '9'
@@ -18,7 +19,7 @@
       | s when String.length s = 4 && s.[0] = '\\' && s.[1] = 'x' ->
           char_of_int (16 * digit_of_char s.[2] + digit_of_char s.[3])
       | s -> s.[0]
-    in IntV (Int32.of_int (int_of_char (f s)))
+    in int_of_char (f s)
 }
 
 let digit = ['0' - '9']
@@ -49,13 +50,12 @@ rule get_token = parse
   | ident as a {Ident a}
   
   (* Literals *)
-  (* Note : StringV s contains the representation of the string as a literal,
-     i.e. the matched lexeme in the file, and not the string "itself" *)
-  | string as s {StringV s}
+
+  | '"' { read_string [] lexbuf }
   | "0x"  (digit_hex+ as s) { read_base 16 Int32.zero (Lexing.from_string s) }
   | ('0' digit_oct*)   as s { read_base 8  Int32.zero (Lexing.from_string s) }
   | (['1'-'9'] digit*) as s { read_base 10 Int32.zero (Lexing.from_string s) }
-  | "'" (character as s) "'" { read_character s }
+  | "'" (character as s) "'" { IntV (Int32.of_int (read_character s)) }
 
   (* Delimiters *)
   | '(' {LParen}  | ')' {RParen}
@@ -92,6 +92,12 @@ and read_base b acc = parse
                                  lexbuf }
   | "" { IntV acc }
 
+and read_string acc = parse
+  | character as c { read_string (read_character c :: acc) lexbuf }
+  | '"' { StringV (List.rev (0 :: acc)) } (* null-terminated string *)
+  | eof { raise UnterminatedString }
+
 {
 
 }
+

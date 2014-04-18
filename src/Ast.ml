@@ -18,7 +18,7 @@ module Raw = struct
 
   type location = Lexing.position * Lexing.position
 
-  type expr' = IntV of Int32.t | StringV of string | Var of string
+  type expr' = IntV of Int32.t | StringV of int list | Var of string
              | Deref of expr
              | Subfield of expr * string
              | Assign of expr * expr
@@ -69,7 +69,7 @@ module Typed = struct
               | Deref of expr
               | LSubfield of ctype * lvalue * string
 
-  and expr' = IntV of Int32.t | StringV of string
+  and expr' = IntV of Int32.t | StringV of int list
             | LValue of lvalue
             | Subfield of expr * string
             | Assign of lvalue * expr
