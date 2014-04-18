@@ -2,6 +2,11 @@ open Ast.Raw
 open TypeError
 module T = Ast.Typed
 module SMap = Map.Make(String)
+module AMap = Map.Make(struct
+    type t = aggregate * string
+    let compare = compare
+  end)
+
 
 (*** Praeludium ***)
 
@@ -10,8 +15,7 @@ module SMap = Map.Make(String)
 type fun_prototype = ctype * ctype list
 
 type typing_environment = { env_vars : ctype SMap.t ;
-                            env_structs : decl_var list SMap.t ;
-                            env_unions  : decl_var list SMap.t ;
+                            env_aggregates : decl_var list AMap.t ;
                             env_functions : fun_prototype SMap.t }
 
 (* Maybe there's a more elegant way to handle primitive functions *)
@@ -19,8 +23,7 @@ let initial_fun_map = SMap.add "putchar" (Int, [Int])
                                (SMap.singleton "sbrk" (Pointer Void, [Int]))
 
 let initial_env = { env_vars = SMap.empty ;
-                    env_structs = SMap.empty ;
-                    env_unions = SMap.empty ;
+                    env_aggregates = AMap.empty ;
                     env_functions = initial_fun_map }
 
 (* Utility functions to lookup the environment *)
@@ -31,9 +34,10 @@ let maybe_find f = try Some (f ()) with Not_found -> None
 let maybe_find_in_env f x env = maybe_find (fun () -> SMap.find x (f env))
 
 let lookup_var      = maybe_find_in_env (fun e -> e.env_vars)
-let lookup_struct   = maybe_find_in_env (fun e -> e.env_structs)
-let lookup_union    = maybe_find_in_env (fun e -> e.env_unions)
 let lookup_function = maybe_find_in_env (fun e -> e.env_functions)
+let lookup_aggregate x env = 
+  try Some (AMap.find x env.env_aggregates)
+  with Not_found -> None
 
 (* field name -> list of fields in a struct/union -> data type of the field
    (if it exists, else None) *)
@@ -89,9 +93,9 @@ let rec lvalue = function
 let rec well_formed env = function
   | TypeNull -> assert false
   | Void | Int | Char -> true
-  | Struct s -> lookup_struct s env <> None (* if a struct is in the environment,
-                                               its fields should already be well-formed *)
-  | Union s -> lookup_union s env <> None
+  (* if a struct/union is in the environment,
+     its fields should already be well-formed *)
+  | Aggregate (k, s) -> lookup_aggregate (k, s) env <> None 
   | Pointer t -> well_formed env t
 
 (** Assertions **)
@@ -259,10 +263,13 @@ and type_subfield : typing_environment -> location -> ctype -> string -> ctype
     let raise_err = raise_err_with_loc loc in
 
     match t with
-    | Struct s -> let fields = lookup_struct s env <??> UnknownStruct s in
-      assoc_field_type x fields <??> UnknownStructField (x,s)
-    | Union s -> let fields = lookup_union s env <??> UnknownUnion s in
-      assoc_field_type x fields <??> UnknownUnionField (x,s)
+    | Aggregate (k, s) ->
+      let err, err_field = match k with
+        | Struct -> UnknownStruct s, UnknownStructField (x,s)
+        | Union  -> UnknownUnion  s, UnknownUnionField  (x,s)
+      in
+      let fields = lookup_aggregate (k, s) env <??> err in
+      assoc_field_type x fields <??> err_field
     | _ -> raise_err (NonComposite t)
 
 (** Type checking of instructions **)
@@ -329,13 +336,11 @@ and typecheck_block : ctype -> typing_environment -> block -> location -> T.bloc
       List.fold_left
         (add_var_with_err loc env (fun x -> NonUniqueLocal x))
         SMap.empty b.block_locals in
-    let new_env =
-      { env_vars = left_biased_merge local_vars_map env.env_vars ;
-        env_structs = env.env_structs ;
-        env_unions = env.env_unions ;
-        env_functions = env.env_functions } in
+    let block_env =
+      { env with env_vars = left_biased_merge local_vars_map env.env_vars }
+    in
     let instrs =
-      List.map (typecheck_instr ret_type new_env) b.block_instrs in
+      List.map (typecheck_instr ret_type block_env) b.block_instrs in
     { T.block_locals = b.block_locals;
       T.block_instrs = instrs }
 
@@ -357,7 +362,7 @@ let typecheck_program : program -> T.program = fun program ->
 
   (* the folding function which checks the soundness of
      the declaration and adds it to the environment *)
-  let f (env, acc_vars, acc_funs) (decl,loc) = 
+  let f (env, acc_vars, acc_funs, acc_aggs) (decl,loc) = 
     
     (* the repetition of this line of code would be avoided
        with a dynamically scoped variable for the current location *)
@@ -396,23 +401,20 @@ let typecheck_program : program -> T.program = fun program ->
                                   then raise_err (NonUniqueGlobal var))
                   global_vars;
         ({ env with env_vars = new_vars_map },
-         List.rev global_vars @ acc_vars, acc_funs)
+         List.rev global_vars @ acc_vars, acc_funs, acc_aggs)
 
 
-      | DType (DStruct (name, fields)) ->
-        if SMap.mem name env.env_structs then raise_err (NonUniqueStructId name)
+      | DType (k, name, fields) ->
+        (* k: aggregate kind (struct or union) *)
+        if AMap.mem (k, name) env.env_aggregates
+        then raise_err begin match k with
+            | Struct -> NonUniqueStructId name
+            | Union  -> NonUniqueUnionId name
+          end
         else begin
-          assert_valid_fields (Struct name) fields;
-          ({ env with env_structs = SMap.add name fields env.env_structs },
-           acc_vars, acc_funs)
-        end
-
-      | DType (DUnion (name, fields)) ->
-        if SMap.mem name env.env_unions then raise_err (NonUniqueUnionId name)
-        else begin
-          assert_valid_fields (Union name) fields;
-          ({ env with env_unions = SMap.add name fields env.env_unions },
-           acc_vars, acc_funs)
+          assert_valid_fields (Aggregate (k, name)) fields;
+          ({ env with env_aggregates = AMap.add (k, name) fields env.env_aggregates },
+           acc_vars, acc_funs, ((k, name), fields) :: acc_aggs)
         end
 
       | DFun fn -> begin
@@ -443,17 +445,17 @@ let typecheck_program : program -> T.program = fun program ->
                          T.fun_args = fn.fun_args;
                          T.fun_body = body }
         in
-        (env_with_fn, acc_vars, new_decl::acc_funs)
+        (env_with_fn, acc_vars, new_decl::acc_funs, acc_aggs)
       end
   in
-  let (final_env, vars, funs) = List.fold_left f (initial_env, [], []) program in
+  let (final_env, vars, funs, aggs) =
+    List.fold_left f (initial_env, [], [], []) program in
   match lookup_function "main" final_env with
     | None -> raise NoMainFunction
     | Some (Int, []) | Some (Int, [Int; Pointer (Pointer Char)]) ->
-      { T.prog_globals = List.rev vars;
-        T.prog_structs = final_env.env_structs;
-        T.prog_unions  = final_env.env_unions;
-        T.prog_funs = List.rev funs }
+      { T.prog_globals    = List.rev vars;
+        T.prog_aggregates = List.rev aggs;
+        T.prog_funs       = List.rev funs }
     | _ -> raise InvalidMainFunction
 
 

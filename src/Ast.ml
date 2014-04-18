@@ -1,7 +1,10 @@
 module SMap = Map.Make(String)
 
 module Common = struct
-  type ctype = Void | Int | Char | Struct of string | Union of string
+  type aggregate = Struct | Union
+
+  type ctype = Void | Int | Char 
+             | Aggregate of aggregate * string
              | Pointer of ctype
              | TypeNull (* Used only for type-checking *)
 
@@ -46,8 +49,7 @@ module Raw = struct
   and block = { block_locals : decl_var list ;
                 block_instrs : instr list }
 
-  type decl_typ = DStruct of string * decl_var list
-                | DUnion of string * decl_var list
+  type decl_typ = aggregate * string * decl_var list
 
   type decl_fun = { fun_name : string ;
                     fun_return_type : ctype ;
@@ -99,10 +101,9 @@ module Typed = struct
                     fun_args : decl_var list ;
                     fun_body : block }
 
-  type program = { prog_globals : decl_var list;
-                   prog_structs : decl_var list SMap.t;
-                   prog_unions  : decl_var list SMap.t;
-                   prog_funs : decl_fun list }
+  type program = { prog_globals    : decl_var list;
+                   prog_aggregates : ((aggregate * string) * decl_var list) list;
+                   prog_funs       : decl_fun list }
 
 end
 

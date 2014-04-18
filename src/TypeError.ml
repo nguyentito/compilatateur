@@ -46,8 +46,8 @@ let rec string_of_type  = function
   | Void -> "void"
   | Int -> "int"
   | Char -> "char"
-  | Struct a -> "struct "^a
-  | Union a -> "union "^a
+  | Aggregate (Struct, a) -> "struct "^a
+  | Aggregate (Union,  a) -> "union "^a
   | TypeNull -> "TypeNull"
   | Pointer a -> (string_of_type a )^"*"
 

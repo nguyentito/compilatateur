@@ -41,7 +41,7 @@ let sizeof = function
   | Void | TypeNull -> assert false
   | Int | Pointer _ -> 4
   | Char            -> 1
-  | Struct _ | Union _ -> failwith "not implemented  yet"
+  | Aggregate _ -> failwith "not implemented  yet"
 
 (* no stream fusion :-( *)
 let sequence : ([< `data | `text] as 'a) asm list -> 'a asm
@@ -63,6 +63,10 @@ let register_string, data_segment_string =
   (fun () -> !dss)
 
 let fun_protos : ctype list SMap.t ref = ref SMap.empty
+
+(* NEXT: aggregates! *)
+
+(***********************)
 
 
 (* See old git snapshots for the memloc type... *)
@@ -101,7 +105,8 @@ let store_loc : register -> ctype -> text
     | Char            -> sb r areg (0, v0)
 
 
-(** recursive AST traversal **)
+
+(*** Recursive AST traversal ***)
 
 let rec compile_expr : stack_frame -> expr -> text
   = fun sf -> function

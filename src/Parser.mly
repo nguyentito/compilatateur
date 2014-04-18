@@ -58,7 +58,7 @@ decl_vars: t = typ ; vars = separated_nonempty_list(Comma, var) ; Semicolon
     { List.map (fun (n, id) -> (multi_pointer t n, id)) vars }
 
 decl_typ: k = type_keyword ; id = Ident ; LCurly fs = decl_vars* RCurly ; Semicolon
-    { k (id, List.concat fs) }
+    { (k, id, List.concat fs) }
 
 decl_fun: tv = typed_var
           LParen args = separated_list(Comma, typed_var) RParen
@@ -72,13 +72,12 @@ decl_fun: tv = typed_var
 (* dunno why, but without the %inline, the reduction
    type_keyword -> Struct or Union would never be applied *)
 %inline type_keyword:
-  | Struct { fun (x,y) -> A.DStruct (x,y) }
-  | Union  { fun (x,y) -> A.DUnion  (x,y) }
+  | Struct { A.Struct }
+  | Union  { A.Union }
 
 typ:
   | Void { A.Void } | Int { A.Int } | Char { A.Char }
-  | Struct id = Ident { A.Struct id }
-  | Union  id = Ident { A.Union  id }
+  | k = type_keyword; id = Ident { A.Aggregate (k, id) }
 
 var: stars = Star* i = Ident { (List.length stars, i) }
 
