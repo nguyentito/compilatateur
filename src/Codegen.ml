@@ -36,9 +36,26 @@ let return_text = add sp fp oi 4
                   ++ lw fp areg (0, fp)
                   ++ jr ra
 
+let list_replicate : int -> 'a -> 'a list 
+  = fun n x ->
+    let rec f acc = function 
+      | 0 -> acc
+      | k -> f (x::acc) (k-1)
+    in
+    f [] n
+
+let enum_up_to : int -> int list
+  = let rec f acc = function
+      | -1 -> acc
+      | k  -> f (k::acc) (k-1)
+    in
+    f []
+
 (* no stream fusion :-( *)
 let sequence : ([< `data | `text] as 'a) asm list -> 'a asm
   = fun xs -> List.fold_right (++) xs nop
+let replicate : int -> ([< `data | `text] as 'a) asm -> 'a asm
+  = fun n x -> sequence (list_replicate n x)
 let seqmap : ('a -> ([< `data | `text] as 'b) asm) -> 'a list -> 'b asm
   = fun f xs -> sequence (List.map f xs)
 
@@ -146,21 +163,41 @@ let sf_of_funargs : decl_var list -> stack_frame
     { sf_locals = SMap.map ((+) shift) sf0.sf_locals;
       sf_top = -4 }
 
-(* let realign_stack : stack_frame -> stack_frame * int *)
-(*   = fun sf -> *)
-(*     let top = sf.sf_top in (\* top is a *negative* offset! *\) *)
-(*     let next_align = - next_multiple (-top) 4 in *)
-(*     ({ sf with sf_top = next_align }, top - next_align) *)
+let load_loc : ctype -> register -> register -> text
+  = fun t rdest rsrc -> match mtype_of t with
+    | MWord -> lw  rdest areg (0, rsrc)
+    | MByte -> lbu rdest areg (0, rsrc)
+    (* !!HACK!!
+       rationale: when passing a struct as argument
+         compile_expr -> returns *address* of struct
+         then copy_aggregate
+    *)
+    | MAgg (k, s) -> nop
 
-let load_loc : register -> ctype -> text
-  = fun r t -> match mtype_of t with
-    | MWord -> lw  r areg (0, v0)
-    | MByte -> lbu r areg (0, v0)
+let store_loc : ctype -> register -> register -> text
+  = fun t rsrc rdest -> match mtype_of t with
+    | MWord -> sw rsrc areg (0, rdest)
+    | MByte -> sb rsrc areg (0, rdest)
 
-let store_loc : register -> ctype -> text
-  = fun r t -> match mtype_of t with
-    | MWord -> sw r areg (0, v0)
-    | MByte -> sb r areg (0, v0)
+let copy_aggregate : aggregate * string -> register -> register -> text
+  = fun (k, s) rsrc rdest ->
+    let mtype = MAgg (k, s) in
+    let size = sizeof mtype and aligned = is_aligned mtype in
+    if aligned
+    then 
+      let s_words = size / 4 and s_bytes = size mod 4 in
+      let copy_word n =
+        lw t0 areg (n*4, rsrc) ++ sw t0 areg (n*4, rdest)
+      and copy_byte n =
+        lbu t0 areg (n+s_words*4, rsrc) ++ sw t0 areg (n+s_words*4, rdest)
+      in
+      sequence (List.map copy_word (enum_up_to (s_words - 1)))
+      ++ sequence (List.map copy_byte (enum_up_to (s_bytes - 1)))
+    else
+      let copy_byte n =
+        lbu t0 areg (n, rsrc) ++ sb t0 areg (n, rdest)
+      in
+      sequence (List.map copy_byte (enum_up_to (size - 1)))
 
 
 type stack_alteration = stack_frame -> text * stack_frame
@@ -205,21 +242,44 @@ let rec compile_expr : stack_frame -> expr -> text
     | (_, StringV s) -> la v0 alab (register_string s)
       
     | (t, LValue lv) -> eval_lvalue_loc sf lv
-                        ++ load_loc v0 t
+                        ++ load_loc t v0 v0
 
     | (_, Apply (fn_id, args)) ->
       with_stack_alteration sf
         (realign_stack_then_do (eval_and_push_args fn_id args))
         (fun _ -> jal ("global_" ^ fn_id))
 
+    (* Special cases for assignment between two structs/unions *)
+    (* this might not be enough... *)
+    | (Aggregate (k, s), Assign (lv_left, (_, LValue lv_right))) ->
+      with_stack_alteration sf realign_stack begin fun sf ->
+        eval_lvalue_loc sf lv_left
+        ++ push v0
+        ++ eval_lvalue_loc sf lv_right
+        ++ pop a0
+        ++ copy_aggregate (k, s) v0 a0
+        (* in the end, v0 contains the address of the right lvalue *)
+      end
+
+    (* chain assignments *)
+    | (Aggregate (k, s), Assign (lv, ((_, Assign _) as e))) ->
+      with_stack_alteration sf realign_stack begin fun sf ->
+        eval_lvalue_loc sf lv
+        ++ push v0
+        ++ compile_expr sf e
+        ++ pop a0
+        ++ copy_aggregate (k, s) v0 a0
+        (* in the end, v0 contains the address of the right lvalue *)
+      end
+
+
     | (t, Assign (lv, e)) ->
       with_stack_alteration sf realign_stack begin fun sf ->
-        compile_expr sf e
+        eval_lvalue_loc sf lv
         ++ push v0
-        ++ eval_lvalue_loc sf lv
+        ++ compile_expr sf e
         ++ pop a0
-        ++ store_loc a0 t
-        ++ move v0 a0
+        ++ store_loc t v0 a0
       end
 
     | (_, Unop (op, e)) -> compile_expr sf e
@@ -301,12 +361,12 @@ let rec compile_expr : stack_frame -> expr -> text
         | PreDecr | PostDecr -> -factor
       in
       eval_lvalue_loc sf lv
-      ++ load_loc a0 t
+      ++ load_loc t a0 v0
       ++ begin match op with
         | PreIncr  | PreDecr  -> add a0 a0 oi imm
-                                 ++ store_loc a0 t
+                                 ++ store_loc t a0 v0
         | PostIncr | PostDecr -> add a1 a0 oi imm
-                                 ++ store_loc a1 t
+                                 ++ store_loc t a1 v0
       end
       ++ move v0 a0
                                    
@@ -334,7 +394,7 @@ and eval_and_push_args : string -> expr list -> stack_frame -> text * stack_fram
        ++ match mtype_of arg_type with
        | MWord -> sw v0 areg (0, sp)
        | MByte -> sb v0 areg (0, sp)
-       | _ -> failwith "not supported yet push"
+       | MAgg (k,s) -> copy_aggregate (k, s) v0 sp
       )
     in
     let proto = SMap.find fn_id !fun_protos in
