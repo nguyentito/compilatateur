@@ -5,7 +5,6 @@ import Control.Arrow
 import Control.Monad
 import Data.Char
 import Data.List
-import Data.Tuple
 import System.Directory
 import System.Environment
 import System.Exit
