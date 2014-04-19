@@ -192,7 +192,7 @@ let realign_stack_then_do : stack_alteration -> stack_alteration
     let next_align = - next_multiple (-sf.sf_top) 4 in
     let offset = sf.sf_top - next_align in
     let (alt_code, sf') = alt { sf with sf_top = next_align } in
-    ((if offset = 0 then nop else add sp sp oi offset) ++ alt_code, sf')
+    ((if offset = 0 then nop else sub sp sp oi offset) ++ alt_code, sf')
 
 let realign_stack : stack_alteration
   = realign_stack_then_do identity_alteration
@@ -213,12 +213,14 @@ let rec compile_expr : stack_frame -> expr -> text
         (fun _ -> jal ("global_" ^ fn_id))
 
     | (t, Assign (lv, e)) ->
-      compile_expr sf e
-      ++ push v0
-      ++ eval_lvalue_loc sf lv
-      ++ pop a0
-      ++ store_loc a0 t
-      ++ move v0 a0
+      with_stack_alteration sf realign_stack begin fun sf ->
+        compile_expr sf e
+        ++ push v0
+        ++ eval_lvalue_loc sf lv
+        ++ pop a0
+        ++ store_loc a0 t
+        ++ move v0 a0
+      end
 
     | (_, Unop (op, e)) -> compile_expr sf e
                            ++ begin match op with
