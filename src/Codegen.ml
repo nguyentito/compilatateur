@@ -189,7 +189,7 @@ let copy_aggregate : aggregate * string -> register -> register -> text
       let copy_word n =
         lw t0 areg (n*4, rsrc) ++ sw t0 areg (n*4, rdest)
       and copy_byte n =
-        lbu t0 areg (n+s_words*4, rsrc) ++ sw t0 areg (n+s_words*4, rdest)
+        lbu t0 areg (n+s_words*4, rsrc) ++ sb t0 areg (n+s_words*4, rdest)
       in
       sequence (List.map copy_word (enum_up_to (s_words - 1)))
       ++ sequence (List.map copy_byte (enum_up_to (s_bytes - 1)))
@@ -537,8 +537,12 @@ let compile_program : Ast.Typed.program -> Mips.program
         ++ sbrk;
       
       data =
-        seqmap (fun (t, id) -> label ("global_" ^ id)
-                               ++ dword [0]) program.prog_globals
+        let f (t, id) =
+          let size = next_multiple (sizeof (mtype_of t)) 4 in
+          label ("global_" ^ id)
+          ++ dword (list_replicate (size / 4) 0)
+        in
+        seqmap f program.prog_globals
         ++ data_segment_string ()
     }
 
