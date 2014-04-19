@@ -1,0 +1,7 @@
+begin program "minic"
+  files = [ "src/Ast.ml" "src/Lexer.mli" "src/Lexer.mll"
+            "src/Parser.mly" ( ocamlyacc = "menhir" )
+            "src/TypeError.ml" "src/Typing.mli" "src/Typing.ml"
+            "src/Mips.mli" "src/Mips.ml" "src/Codegen.ml"
+            "src/MiniC.ml" ]
+end
