@@ -53,8 +53,8 @@ let rec string_of_type  = function
 
 
 let error_message = function
-  | TypeMismatch (a, b) -> "Expected type "^(string_of_type a)^
-    " isn't of type "^ (string_of_type b)
+  | TypeMismatch (a, b) -> "Mismatch between expected type "^(string_of_type a)^
+    " and actual type "^ (string_of_type b)
 
   | UnknownVar a -> "Variable name "^a^" is not defined"
   | UnknownStruct a -> "Struct name "^a^" is not defined"

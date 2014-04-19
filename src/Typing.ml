@@ -156,7 +156,7 @@ let rec type_expr : typing_environment -> expr -> T.expr
     | Sizeof Void -> raise_err SizeofVoid
     | Sizeof t -> assert_well_formed loc env t; (Int, T.Sizeof t)
 
-    | Address e -> let (t, e') = type_lvalue env e in (t, T.Address e')
+    | Address e -> let (t, e') = type_lvalue env e in (Pointer t, T.Address e')
       
     | Subfield (e,x) -> begin
         try lvalue_to_expr ()
