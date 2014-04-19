@@ -242,6 +242,7 @@ let rec compile_expr : stack_frame -> expr -> text
           ++ jump v0 end_label
           ++ compile_expr sf e2
           ++ label end_label
+          ++ sne v0 v0 zero
           
         (* comparisons *)
         | Equal | Different | Less | LessEq | Greater | GreaterEq ->
@@ -349,7 +350,12 @@ and eval_lvalue_loc : stack_frame -> lvalue -> text
           la v0 alab ("global_" ^ id)
       end
     | Deref e -> compile_expr sf e
-    | LSubfield _ -> failwith "not implemented yet subfield"
+    | LSubfield (Aggregate (k, s), lv, x) -> 
+      let agg_desc = Hashtbl.find aggregate_descs (k, s) in
+      let (offset, _) = SMap.find x agg_desc.ad_fields in
+      eval_lvalue_loc sf lv
+      ++ add v0 v0 oi offset
+    | _ -> assert false
 
 
 

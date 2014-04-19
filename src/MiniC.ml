@@ -2,7 +2,7 @@ let type_only = ref false
 let parse_only = ref false
 
 let print_version () =
-  print_endline "MiniC : A compiler for a small subset of C\nVersion 0.42";
+  print_endline "MiniC : A compiler for a small subset of C\nVersion 0.89";
   exit 0
 
 let usage_msg = "Usage : minic [options] file"
@@ -66,7 +66,7 @@ let main_exec filename =
           Printf.eprintf "File \"%s\", line 1, characters 0-0 :\ninvalid main function\n" filename
 
   with 
-    | Sys_error _  -> Printf.eprintf "%s : file not found" filename; exit 2
+    | Sys_error _  -> Printf.eprintf "%s : file not found\n" filename; exit 2
 
 let main () =
   if Array.length Sys.argv = 1
