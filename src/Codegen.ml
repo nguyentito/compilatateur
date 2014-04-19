@@ -123,19 +123,34 @@ let desc_of_aggregate : aggregate -> decl_var list -> aggregate_desc
 type stack_frame = { sf_locals : int SMap.t;
                      sf_top : int }
 
-let sf_of_funargs args = 
-  let f (map, depth) (t, id) =
-    (SMap.add id depth map, depth + 4) (* TODO: handle chars and structs *)
-  in
-  { sf_locals = fst (List.fold_left f (SMap.empty, 4) (List.rev args));
-    sf_top = -4 }
+let push_locals_on_sf : decl_var list -> stack_frame -> stack_frame 
+  = fun vars sf ->
+    let f (locals, top) (t, id) =
+      let mtype = mtype_of t in
+      let top = top - sizeof mtype in
+      if is_aligned mtype then
+        (* top is a *negative* offset! *)
+        let next_align = - next_multiple (-top) 4 in
+        (SMap.add id next_align locals, next_align)
+      else (SMap.add id top locals, top)
+    in
+    let (locals, top) = List.fold_left f (sf.sf_locals, sf.sf_top) vars in
+    { sf_top = top; sf_locals = locals }
 
-let push_locals_on_sf vars sf =
-  let f (map, depth) (t, id) =
-    let depth = depth - 4 in
-    (SMap.add id depth map, depth)
-  in
-  { sf with sf_locals = fst (List.fold_left f (sf.sf_locals, sf.sf_top) vars) }
+let sf_of_funargs : decl_var list -> stack_frame 
+  = fun args ->
+    let sf0 = push_locals_on_sf args { sf_top = 0;
+                                       sf_locals = SMap.empty } in
+    let minus_next_align = next_multiple (-sf0.sf_top) 4 in
+    let shift = minus_next_align + 4 (* room for $fp *) in
+    { sf_locals = SMap.map ((+) shift) sf0.sf_locals;
+      sf_top = -4 }
+
+(* let realign_stack : stack_frame -> stack_frame * int *)
+(*   = fun sf -> *)
+(*     let top = sf.sf_top in (\* top is a *negative* offset! *\) *)
+(*     let next_align = - next_multiple (-top) 4 in *)
+(*     ({ sf with sf_top = next_align }, top - next_align) *)
 
 let load_loc : register -> ctype -> text
   = fun r t -> match mtype_of t with
@@ -148,6 +163,40 @@ let store_loc : register -> ctype -> text
     | MByte -> sb r areg (0, v0)
 
 
+type stack_alteration = stack_frame -> text * stack_frame
+
+let identity_alteration : stack_alteration
+  = fun sf -> (nop, sf)
+
+(* version 1: let the alteration do the work of modifying $sp by default,
+   and provide an auto_push flag *)
+let with_stack_alteration
+  : ?auto_push:bool -> stack_frame -> stack_alteration -> (stack_frame -> text) -> text
+  = fun ?(auto_push=false) sf alt code ->
+    let (alt_code, sf') = alt sf in
+    let offset = sf.sf_top - sf'.sf_top in (* idea: offset >= 0 *)
+    alt_code
+    ++ (if auto_push then sub sp sp oi offset else nop)
+    ++ code sf'
+    ++ (if offset = 0 then nop else add sp sp oi offset)
+
+(* version 2: the alteration only computes the new top of the stack *)
+let with_stack_alteration'
+  : stack_frame -> (stack_frame -> stack_frame) -> (stack_frame -> text) -> text
+  = fun sf alt' code ->
+    let alt sf' = (nop, alt' sf') in
+    with_stack_alteration ~auto_push:true sf alt code
+
+let realign_stack_then_do : stack_alteration -> stack_alteration
+  = fun alt -> fun sf ->
+    let next_align = - next_multiple (-sf.sf_top) 4 in
+    let offset = sf.sf_top - next_align in
+    let (alt_code, sf') = alt { sf with sf_top = next_align } in
+    ((if offset = 0 then nop else add sp sp oi offset) ++ alt_code, sf')
+
+let realign_stack : stack_alteration
+  = realign_stack_then_do identity_alteration
+
 (*** Recursive AST traversal ***)
 
 let rec compile_expr : stack_frame -> expr -> text
@@ -159,9 +208,9 @@ let rec compile_expr : stack_frame -> expr -> text
                         ++ load_loc v0 t
 
     | (_, Apply (fn_id, args)) ->
-      eval_and_push_args sf fn_id args
-      ++ jal ("global_" ^ fn_id)
-      ++ add sp sp oi (4 * List.length args)
+      with_stack_alteration sf
+        (realign_stack_then_do (eval_and_push_args fn_id args))
+        (fun _ -> jal ("global_" ^ fn_id))
 
     | (t, Assign (lv, e)) ->
       compile_expr sf e
@@ -265,19 +314,28 @@ let rec compile_expr : stack_frame -> expr -> text
 
     | (_, Sizeof ctype) -> li v0 (sizeof (mtype_of ctype))
 
-and eval_and_push_args : stack_frame -> string -> expr list -> text
-  = fun sf fn_id args -> 
-    let f arg_type arg =
-      compile_expr sf arg
-      ++ match mtype_of arg_type with
-      | MWord -> sub sp sp oi 4
-                 ++ sw v0 areg (0, sp)
-      | MByte -> sub sp sp oi 4 (* quelle flemme... TODO: s/4/1/ *)
-                 ++ sb v0 areg (0, sp)
-      | _ -> failwith "not supported yet push"
+
+and eval_and_push_args : string -> expr list -> stack_frame -> text * stack_frame
+  = fun fn_id args sf0 -> 
+    let f (sf, code) arg_type arg =
+      let mtype = mtype_of arg_type in
+      let top = sf.sf_top - sizeof mtype in
+      let top = if is_aligned mtype then - next_multiple (-top) 4 else top in
+      let offset = sf.sf_top - top in
+      ({ sf with sf_top = top },
+       code
+       ++ compile_expr sf arg
+       ++ sub sp sp oi offset
+       ++ match mtype_of arg_type with
+       | MWord -> sw v0 areg (0, sp)
+       | MByte -> sb v0 areg (0, sp)
+       | _ -> failwith "not supported yet push"
+      )
     in
     let proto = SMap.find fn_id !fun_protos in
-    sequence (List.map2 f proto args)
+    let (sf, code) = List.fold_left2 f (sf0, nop) proto args in
+    let (final_realignment, sf) = realign_stack sf in
+    (code ++ final_realignment, sf)
 
 and eval_lvalue_loc : stack_frame -> lvalue -> text
   = fun sf -> function
@@ -353,13 +411,8 @@ let rec compile_instr : stack_frame -> instr -> text
     | Block b -> compile_block sf b
 
 and compile_block : stack_frame -> block -> text = fun sf b ->
-  let locals = b.block_locals in
-  let sf = push_locals_on_sf locals sf in
-  begin
-    if locals = [] then nop
-    else sub sp sp oi (4 * List.length locals)
-  end
-  ++ seqmap (compile_instr sf) b.block_instrs
+  with_stack_alteration' sf (push_locals_on_sf b.block_locals)
+    (fun sf -> seqmap (compile_instr sf) b.block_instrs)
 
 let compile_function : decl_fun -> text =
   fun f -> 
