@@ -229,7 +229,8 @@ let rec compile_expr : stack_frame -> expr -> text
                              | Not -> seq v0 v0 zero
                            end
 
-    | (__, Binop (op, ((t1, _) as e1), ((t2, _) as e2))) -> begin match op with
+    | (__, Binop (op, ((t1, _) as e1), ((t2, _) as e2))) -> 
+      with_stack_alteration sf realign_stack begin fun sf -> match op with
         (* short-circuiting logical operators *)
         | And | Or ->
           let jump = match op with
@@ -244,6 +245,7 @@ let rec compile_expr : stack_frame -> expr -> text
           ++ label end_label
           ++ sne v0 v0 zero
           
+        (* TODO: realign stack? *)
         (* comparisons *)
         | Equal | Different | Less | LessEq | Greater | GreaterEq ->
           let cmp = match op with
